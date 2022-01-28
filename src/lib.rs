@@ -21,7 +21,9 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 pub mod const_config;
 mod const_sys;
+mod dns;
 pub mod epoll;
+pub mod hasher;
 mod http_content_length;
 mod net;
 mod syscall;

@@ -84,7 +84,7 @@ pub fn u64toa(buf: &mut [i8], value: u64) -> i64 {
    index as i64
 }
 
-// Convert u8 to ascii string representation to bytes. Returns bytes written
+// Convert u8 to ascii string representation to bytes.
 #[inline]
 pub fn u8toa(out_buf_start: *const u8, value: u8) -> usize {
    let mut buf_walker = out_buf_start.as_mut();
@@ -110,22 +110,4 @@ pub fn u8toa(out_buf_start: *const u8, value: u8) -> usize {
    }
 
    buf_walker as usize - out_buf_start as usize
-}
-
-// Convert ascii string representation of a number to u8
-#[inline]
-pub fn atou8(in_buf_start: *const u8, len: usize) -> u8 {
-   debug_assert!(len <= 3);
-
-   let mut output: u8 = 0;
-   let mut buf_walker = in_buf_start;
-
-   unsafe {
-      for _ in 0..len {
-         output = output * 10 + (*buf_walker - 48u8);
-         buf_walker = buf_walker.add(1);
-      }
-   }
-
-   output
 }
