@@ -1,0 +1,14 @@
+[package]
+name = "faf-dns-proxy"
+version = "0.1.0"
+authors = ["James Bates <errantmind@protonmail.com>"]
+edition = "2021"
+
+[features]
+default = []
+
+[dependencies]
+#dnsparse = "*"
+dns-parser = "*"
+rustls = "*"
+webpki-roots = "*"

@@ -1,0 +1,131 @@
+// This particular file is LICENSED AS Unlicense (https://unlicense.org/)
+
+const DIGITS_LUT: [char; 200] = [
+   '0', '0', '0', '1', '0', '2', '0', '3', '0', '4', '0', '5', '0', '6', '0', '7', '0', '8', '0', '9', '1', '0', '1',
+   '1', '1', '2', '1', '3', '1', '4', '1', '5', '1', '6', '1', '7', '1', '8', '1', '9', '2', '0', '2', '1', '2', '2',
+   '2', '3', '2', '4', '2', '5', '2', '6', '2', '7', '2', '8', '2', '9', '3', '0', '3', '1', '3', '2', '3', '3', '3',
+   '4', '3', '5', '3', '6', '3', '7', '3', '8', '3', '9', '4', '0', '4', '1', '4', '2', '4', '3', '4', '4', '4', '5',
+   '4', '6', '4', '7', '4', '8', '4', '9', '5', '0', '5', '1', '5', '2', '5', '3', '5', '4', '5', '5', '5', '6', '5',
+   '7', '5', '8', '5', '9', '6', '0', '6', '1', '6', '2', '6', '3', '6', '4', '6', '5', '6', '6', '6', '7', '6', '8',
+   '6', '9', '7', '0', '7', '1', '7', '2', '7', '3', '7', '4', '7', '5', '7', '6', '7', '7', '7', '8', '7', '9', '8',
+   '0', '8', '1', '8', '2', '8', '3', '8', '4', '8', '5', '8', '6', '8', '7', '8', '8', '8', '9', '9', '0', '9', '1',
+   '9', '2', '9', '3', '9', '4', '9', '5', '9', '6', '9', '7', '9', '8', '9', '9',
+];
+
+// Convert u64 to ascii string representation to bytes. This is useful for Content-Length
+#[inline]
+pub fn u64toa(buf: &mut [i8], value: u64) -> i64 {
+   let mut index: usize = 0;
+   if value < 100000000 {
+      let v: u32 = (value) as u32;
+      if v < 10000 {
+         let d1: u32 = (v / 100) << 1;
+         let d2: u32 = (v % 100) << 1;
+
+         if v >= 1000 {
+            buf[index] = DIGITS_LUT[d1 as usize] as i8;
+            index += 1;
+         }
+
+         if v >= 100 {
+            buf[index] = DIGITS_LUT[d1 as usize + 1] as i8;
+            index += 1;
+         }
+
+         if v >= 10 {
+            buf[index] = DIGITS_LUT[d2 as usize] as i8;
+            index += 1;
+         }
+
+         buf[index] = DIGITS_LUT[d2 as usize + 1] as i8;
+         index += 1;
+      } else {
+         let b: u32 = v / 10000;
+         let c: u32 = v % 10000;
+
+         let d1: u32 = (b / 100) << 1;
+         let d2: u32 = (b % 100) << 1;
+
+         let d3: u32 = (c / 100) << 1;
+         let d4: u32 = (c % 100) << 1;
+
+         if value >= 10000000 {
+            buf[index] = DIGITS_LUT[d1 as usize] as i8;
+            index += 1;
+         }
+
+         if value >= 1000000 {
+            buf[index] = DIGITS_LUT[d1 as usize + 1] as i8;
+            index += 1;
+         }
+
+         if value >= 100000 {
+            buf[index] = DIGITS_LUT[d2 as usize] as i8;
+            index += 1;
+         }
+
+         buf[index] = DIGITS_LUT[d2 as usize + 1] as i8;
+         index += 1;
+
+         buf[index] = DIGITS_LUT[d3 as usize] as i8;
+         index += 1;
+
+         buf[index] = DIGITS_LUT[d3 as usize + 1] as i8;
+         index += 1;
+
+         buf[index] = DIGITS_LUT[d4 as usize] as i8;
+         index += 1;
+
+         buf[index] = DIGITS_LUT[d4 as usize + 1] as i8;
+         index += 1;
+      }
+   }
+
+   index as i64
+}
+
+// Convert u8 to ascii string representation to bytes. Returns bytes written
+#[inline]
+pub fn u8toa(out_buf_start: *const u8, value: u8) -> usize {
+   let mut buf_walker = out_buf_start.as_mut();
+
+   let v: u32 = value as u32;
+
+   let d1: u32 = (v / 100) << 1;
+   let d2: u32 = (v % 100) << 1;
+
+   unsafe {
+      if v >= 100 {
+         *buf_walker = *DIGITS_LUT.get_unchecked(d1 as usize + 1) as u8;
+         buf_walker = buf_walker.add(1);
+      }
+
+      if v >= 10 {
+         *buf_walker = *DIGITS_LUT.get_unchecked(d2 as usize) as u8;
+         buf_walker = buf_walker.add(1);
+      }
+
+      *buf_walker = *DIGITS_LUT.get_unchecked(d2 as usize + 1) as u8;
+      buf_walker = buf_walker.add(1);
+   }
+
+   buf_walker as usize - out_buf_start as usize
+}
+
+// Convert ascii string representation of a number to u8
+#[inline]
+pub fn atou8(in_buf_start: *const u8, len: usize) -> u8 {
+   debug_assert!(len <= 3);
+
+   let mut output: u8 = 0;
+   let mut buf_walker = in_buf_start;
+
+   unsafe {
+      for _ in 0..len {
+         output = output * 10 + (*buf_walker - 48u8);
+         buf_walker = buf_walker.add(1);
+      }
+   }
+
+   output
+}
