@@ -124,8 +124,7 @@ fn threaded_worker(port: u16, cpu_core: i32) {
       &saved_event_in_only as *const epoll_event as isize
    );
 
-   let mut query_cache: std::collections::HashMap<&[u8], std::vec::Vec<u8>, std::hash::BuildHasherDefault<hasher::FaFHasher>> =
-      hasher::FaFHashMap::default();
+   let mut query_cache: hasher::FaFHashMap<&[u8], std::vec::Vec<u8>> = hasher::FaFHashMap::default();
 
    loop {
       let num_incoming_events = sys_call!(
@@ -140,8 +139,6 @@ fn threaded_worker(port: u16, cpu_core: i32) {
          let cur_fd = unsafe { (*epoll_events.get_unchecked(index as usize)).data.fd } as isize;
 
          if cur_fd == fd_client_udp_listener {
-            println!("waiting on read from fd_client_udp_listener...");
-
             let read_client = sys_call!(
                SYS_RECVFROM as isize,
                fd_client_udp_listener,
@@ -154,26 +151,27 @@ fn threaded_worker(port: u16, cpu_core: i32) {
 
             if likely(read_client > 0) {
                debug_assert!(read_client <= 512);
+
                // Extract just the id from the client request
                let id = dns::get_id_big_endian(buf_client_request.as_ptr(), read_client as usize);
                let unique_query_name = dns::get_query_unique_id(buf_client_request.as_ptr(), read_client as usize);
-               let cached_response_maybe = query_cache.get(unique_query_name);
+               let cached_response_maybe = query_cache.get_mut(unique_query_name);
+
                if let Some(cached_response) = cached_response_maybe {
-                  let derefed_response = cached_response.as_slice() as *const _ as *const u8;
-                  dns::set_id_big_endian(id, derefed_response, cached_response.len());
-                  let derefed_response_ptr = derefed_response as *const _ as *mut u8;
-                  unsafe { *(derefed_response_ptr as *mut u16) = id };
-                  let wrote = sys_call!(
+                  let response_bytes_stripped_tcp_prefix = dns::remove_tcp_dns_size_prefix(cached_response);
+                  dns::set_id_big_endian(id, response_bytes_stripped_tcp_prefix);
+
+                  let _wrote = sys_call!(
                      SYS_SENDTO as isize,
                      fd_client_udp_listener as isize,
-                     derefed_response as isize,
-                     cached_response.len() as isize,
+                     response_bytes_stripped_tcp_prefix as *const _ as *const u8 as isize,
+                     response_bytes_stripped_tcp_prefix.len() as isize,
                      0,
                      &client_addr as *const _ as isize,
                      client_socket_len as isize
                   );
 
-                  println!("wrote {} CACHED bytes back to client", wrote);
+                  println!("Wrote CACHED response directly back to client");
                   continue;
                }
 
@@ -182,15 +180,6 @@ fn threaded_worker(port: u16, cpu_core: i32) {
                saved_addr.sin_family = client_addr.sin_family;
                saved_addr.sin_port = client_addr.sin_port;
                saved_addr.sin_addr.s_addr = client_addr.sin_addr.s_addr;
-
-               // let query_slice: &mut [u8] =
-               //    unsafe { core::slice::from_raw_parts_mut(buf_client_request.as_mut_ptr(), read_client as usize) };
-
-               // let parsed_dns = dns_parser::Packet::parse(query_slice).unwrap();
-               // println!("{:?}", parsed_dns);
-
-               println!("===============================================================================");
-               println!("TLS DNS");
 
                let is_connected: bool = match tls_client_conn.process_new_packets() {
                   Ok(io_state) => !io_state.peer_has_closed(),
@@ -235,15 +224,12 @@ fn threaded_worker(port: u16, cpu_core: i32) {
                   unsafe { core::slice::from_raw_parts_mut(buf_client_request.as_mut_ptr(), read_client as usize + 2) };
 
                match tls_client_conn.writer().write_all(query_slice_with_len_added) {
-                  Ok(_) => println!("write_all {} bytes", query_slice_with_len_added.len()),
+                  Ok(_) => (), //println!("write_all {} bytes", query_slice_with_len_added.len()),
                   Err(error) => println!("write_all failed with error {}", error),
                }
                match tls_client_conn.write_tls(&mut sock) {
-                  Ok(n) => {
-                     println!("write_tls {} bytes", n);
-                  }
+                  Ok(n) => {}
                   Err(error) => {
-                     println!("Reconnecting..");
                      sys_call!(SYS_EPOLL_CTL as isize, epfd, EPOLL_CTL_DEL as isize, upstream_fd, 0);
                      (tls_client_conn, sock, upstream_fd) =
                         tls::connect_helper("one.one.one.one", "1.1.1.1", 853, &tls_client_config);
@@ -260,13 +246,7 @@ fn threaded_worker(port: u16, cpu_core: i32) {
                   }
                }
             }
-
-            println!("===============================================================================");
          } else if cur_fd == upstream_fd as isize {
-            println!("EPFD ACTIVATED, UPSTREAM FD");
-
-            println!("waiting on read from upstream");
-
             match tls_client_conn.read_tls(&mut sock) {
                Err(error) => {
                   if error.kind() == std::io::ErrorKind::WouldBlock {
@@ -285,7 +265,7 @@ fn threaded_worker(port: u16, cpu_core: i32) {
                }
 
                Ok(n) => {
-                  println!("read {} encrypted bytes from socket", n)
+                  //println!("read {} encrypted bytes from socket", n)
                }
             };
 
@@ -298,36 +278,53 @@ fn threaded_worker(port: u16, cpu_core: i32) {
             };
 
             let bytes_to_read = io_state.plaintext_bytes_to_read();
-            if io_state.plaintext_bytes_to_read() > 0 {
-               let mut response_bytes = Vec::with_capacity(bytes_to_read);
-               // let exact_slice: &mut [u8] = unsafe {
-               //    core::slice::from_raw_parts_mut(buf_upstream_response.as_mut_ptr(), bytes_to_read as usize)
-               // };
-               tls_client_conn.reader().read_exact(response_bytes.as_mut_slice()).unwrap();
+            if bytes_to_read > 0 {
+               let mut response_buffer = Vec::with_capacity(bytes_to_read);
+               unsafe { response_buffer.set_len(bytes_to_read) };
+               tls_client_conn.reader().read_exact(&mut response_buffer).unwrap();
 
-               let upstream_response_vec_slice = dns::strip_tcp_dns_size_prefix(&response_bytes);
+               // We loop here in case there are multiple responses back-to-back in our buffer
+               loop {
+                  let response_slice_size = {
+                     let tcp_reported_len = dns::get_tcp_dns_size_prefix_le(&response_buffer);
+                     tcp_reported_len + 2
+                  };
 
-               let id = dns::get_id_big_endian(upstream_response_vec_slice.as_ptr(), upstream_response_vec_slice.len());
+                  let response_stripped = {
+                     let response_slice = &mut response_buffer[0..response_slice_size];
+                     dns::remove_tcp_dns_size_prefix(response_slice)
+                  };
 
-               let wrote = sys_call!(
-                  SYS_SENDTO as isize,
-                  fd_client_udp_listener as isize,
-                  upstream_response_vec_slice.as_ptr() as isize,
-                  upstream_response_vec_slice.len() as isize,
-                  0,
-                  unsafe { buf_id_router.get_unchecked(id as usize) } as *const _ as isize,
-                  client_socket_len as isize
-               );
+                  {
+                     let id = dns::get_id_big_endian(response_stripped.as_ptr(), response_stripped.len());
 
-               println!("wrote {} bytes back to client", wrote);
-               let unique_query_name =
-                  dns::get_query_unique_id(upstream_response_vec_slice.as_ptr(), upstream_response_vec_slice.len());
-               query_cache.insert(unique_query_name, response_bytes);
+                     let _wrote = sys_call!(
+                        SYS_SENDTO as isize,
+                        fd_client_udp_listener as isize,
+                        response_stripped.as_ptr() as isize,
+                        response_stripped.len() as isize,
+                        0,
+                        unsafe { buf_id_router.get_unchecked(id as usize) } as *const _ as isize,
+                        SOCK_LEN as isize
+                     );
+                  }
+
+                  let cache_key = dns::get_query_unique_id(response_stripped.as_ptr(), response_stripped.len());
+
+                  println!("wrote uncached response to client for unique name {:?}", cache_key);
+
+                  let more_responses = response_buffer.drain(response_slice_size..).collect();
+                  query_cache.insert(cache_key, response_buffer);
+                  response_buffer = more_responses;
+
+                  if response_buffer.is_empty() {
+                     break;
+                  }
+               }
             }
 
             if io_state.peer_has_closed() {
                sys_call!(SYS_EPOLL_CTL as isize, epfd, EPOLL_CTL_DEL as isize, upstream_fd, 0);
-               println!("Peer has closed connection");
             }
          }
       }
