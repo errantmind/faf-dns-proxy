@@ -19,6 +19,12 @@ fn hash_naive(mut to_hash: u64) -> u64 {
    to_hash
 }
 
+impl FaFHasher {
+   pub const fn new() -> Self {
+      FaFHasher(0)
+   }
+}
+
 impl Hasher for FaFHasher {
    #[inline]
    fn finish(&self) -> u64 {

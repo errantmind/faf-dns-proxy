@@ -26,6 +26,7 @@ use crate::sys_call;
 use crate::tls;
 use crate::util;
 use core::intrinsics::likely;
+use lazy_static::lazy_static;
 use std::io::Read;
 use std::io::Write;
 
@@ -43,8 +44,15 @@ pub struct epoll_event {
    pub data: epoll_data,
 }
 
+lazy_static! {
+   static ref DNS_CACHE: std::sync::Mutex<hasher::FaFHashMap<&'static [u8], std::vec::Vec<u8>>> =
+      std::sync::Mutex::new(hasher::FaFHashMap::default());
+}
+
 #[inline(never)]
 pub fn go(port: u16) {
+   //unsafe { DNS_CACHE = std::sync::Mutex::new(hasher::FaFHashMap::default()) };
+
    // Attempt to set a higher process priority, indicated by a negative number. -20 is the highest possible
    sys_call!(SYS_SETPRIORITY as isize, PRIO_PROCESS as isize, 0, -19);
 
@@ -74,7 +82,6 @@ pub fn go(port: u16) {
 #[inline(never)]
 fn threaded_worker(port: u16, cpu_core: i32) {
    let epfd = sys_call!(SYS_EPOLL_CREATE1 as isize, 0);
-   sys_call!(SYS_EPOLL_CTL as isize, epfd, EPOLL_CTL_DEL as isize, 0, 0);
 
    let fd_client_udp_listener = net::get_udp_socket(cpu_core);
    net::bind_socket(fd_client_udp_listener, INADDR_ANY, port);
@@ -124,7 +131,7 @@ fn threaded_worker(port: u16, cpu_core: i32) {
       &saved_event_in_only as *const epoll_event as isize
    );
 
-   let mut query_cache: hasher::FaFHashMap<&[u8], std::vec::Vec<u8>> = hasher::FaFHashMap::default();
+   // let mut query_cache: hasher::FaFHashMap<&[u8], std::vec::Vec<u8>> = hasher::FaFHashMap::default();
 
    loop {
       let num_incoming_events = sys_call!(
@@ -152,28 +159,37 @@ fn threaded_worker(port: u16, cpu_core: i32) {
             if likely(read_client > 0) {
                debug_assert!(read_client <= 512);
 
+               println!("1");
+
                // Extract just the id from the client request
                let id = dns::get_id_big_endian(buf_client_request.as_ptr(), read_client as usize);
                let unique_query_name = dns::get_query_unique_id(buf_client_request.as_ptr(), read_client as usize);
-               let cached_response_maybe = query_cache.get_mut(unique_query_name);
 
-               if let Some(cached_response) = cached_response_maybe {
-                  let response_bytes_stripped_tcp_prefix = dns::remove_tcp_dns_size_prefix(cached_response);
-                  dns::set_id_big_endian(id, response_bytes_stripped_tcp_prefix);
+               // Scope for Mutex's Guard
+               {
+                  let mut cache_guard = DNS_CACHE.lock().unwrap();
+                  let cached_response_maybe = cache_guard.get_mut(unique_query_name);
+                  println!("2");
+                  if let Some(cached_response) = cached_response_maybe {
+                     let response_bytes_stripped_tcp_prefix = dns::remove_tcp_dns_size_prefix(cached_response);
+                     dns::set_id_big_endian(id, response_bytes_stripped_tcp_prefix);
 
-                  let _wrote = sys_call!(
-                     SYS_SENDTO as isize,
-                     fd_client_udp_listener as isize,
-                     response_bytes_stripped_tcp_prefix as *const _ as *const u8 as isize,
-                     response_bytes_stripped_tcp_prefix.len() as isize,
-                     0,
-                     &client_addr as *const _ as isize,
-                     client_socket_len as isize
-                  );
+                     let _wrote = sys_call!(
+                        SYS_SENDTO as isize,
+                        fd_client_udp_listener as isize,
+                        response_bytes_stripped_tcp_prefix as *const _ as *const u8 as isize,
+                        response_bytes_stripped_tcp_prefix.len() as isize,
+                        0,
+                        &client_addr as *const _ as isize,
+                        client_socket_len as isize
+                     );
 
-                  println!("Wrote CACHED response directly back to client");
-                  continue;
+                     println!("Wrote CACHED response directly back to client");
+                     continue;
+                  }
                }
+
+               println!("3");
 
                // Save the client state
                let mut saved_addr = unsafe { buf_id_router.get_unchecked_mut(id as usize) };
@@ -188,8 +204,9 @@ fn threaded_worker(port: u16, cpu_core: i32) {
                      false
                   }
                };
-
+               println!("4");
                if !is_connected {
+                  println!("5");
                   println!("Reconnecting..");
                   sys_call!(SYS_EPOLL_CTL as isize, epfd, EPOLL_CTL_DEL as isize, upstream_fd, 0);
                   (tls_client_conn, sock, upstream_fd) =
@@ -223,13 +240,17 @@ fn threaded_worker(port: u16, cpu_core: i32) {
                let query_slice_with_len_added: &mut [u8] =
                   unsafe { core::slice::from_raw_parts_mut(buf_client_request.as_mut_ptr(), read_client as usize + 2) };
 
+               println!("6");
                match tls_client_conn.writer().write_all(query_slice_with_len_added) {
                   Ok(_) => (), //println!("write_all {} bytes", query_slice_with_len_added.len()),
                   Err(error) => println!("write_all failed with error {}", error),
                }
                match tls_client_conn.write_tls(&mut sock) {
-                  Ok(n) => {}
+                  Ok(n) => {
+                     println!("7");
+                  }
                   Err(error) => {
+                     println!("8");
                      sys_call!(SYS_EPOLL_CTL as isize, epfd, EPOLL_CTL_DEL as isize, upstream_fd, 0);
                      (tls_client_conn, sock, upstream_fd) =
                         tls::connect_helper("one.one.one.one", "1.1.1.1", 853, &tls_client_config);
@@ -242,7 +263,35 @@ fn threaded_worker(port: u16, cpu_core: i32) {
                         upstream_fd as isize,
                         &saved_event_in_only as *const epoll_event as isize
                      );
-                     println!("write_tls failed with error {}", error);
+                     println!("write_tls failed with error on core {} | {} \n retrying", cpu_core, error);
+                     match tls_client_conn.writer().write_all(query_slice_with_len_added) {
+                        Ok(_) => (), //println!("write_all {} bytes", query_slice_with_len_added.len()),
+                        Err(error) => println!("write_all failed with error {}", error),
+                     }
+
+                     println!("9");
+
+                     match tls_client_conn.write_tls(&mut sock) {
+                        Ok(n) => {
+                           println!("10");
+                        }
+                        Err(error) => {
+                           println!("11");
+                           sys_call!(SYS_EPOLL_CTL as isize, epfd, EPOLL_CTL_DEL as isize, upstream_fd, 0);
+                           (tls_client_conn, sock, upstream_fd) =
+                              tls::connect_helper("one.one.one.one", "1.1.1.1", 853, &tls_client_config);
+
+                           saved_event_in_only.data.fd = upstream_fd as i32;
+                           sys_call!(
+                              SYS_EPOLL_CTL as isize,
+                              epfd,
+                              EPOLL_CTL_ADD as isize,
+                              upstream_fd as isize,
+                              &saved_event_in_only as *const epoll_event as isize
+                           );
+                           println!("write_tls failed with error on core {} | {} \n NOT RETRYING", cpu_core, error);
+                        }
+                     }
                   }
                }
             }
@@ -253,14 +302,15 @@ fn threaded_worker(port: u16, cpu_core: i32) {
                      println!("WouldBlock");
                      continue;
                   }
-                  println!("TLS read error: {:?}", error);
+                  println!("TLS read error on core {}: {:?}", cpu_core, error);
                   sys_call!(SYS_EPOLL_CTL as isize, epfd, EPOLL_CTL_DEL as isize, upstream_fd, 0);
                   continue;
                }
 
                Ok(0) => {
-                  println!("EOF, handling connection close upstream_fd");
+                  println!("EOF, handling connection close upstream_fd on core {}", cpu_core);
                   sys_call!(SYS_EPOLL_CTL as isize, epfd, EPOLL_CTL_DEL as isize, upstream_fd, 0);
+                  let _ = tls_client_conn.complete_io(&mut sock);
                   continue;
                }
 
@@ -311,10 +361,16 @@ fn threaded_worker(port: u16, cpu_core: i32) {
 
                   let cache_key = dns::get_query_unique_id(response_stripped.as_ptr(), response_stripped.len());
 
-                  println!("wrote uncached response to client for unique name {:?}", cache_key);
+                  println!("wrote uncached response to on core {} client for unique name {:?}", cpu_core, cache_key);
 
                   let more_responses = response_buffer.drain(response_slice_size..).collect();
-                  query_cache.insert(cache_key, response_buffer);
+
+                  // Scope for Mutex's Guard
+                  {
+                     let mut cache_guard = DNS_CACHE.lock().unwrap();
+                     cache_guard.insert(cache_key, response_buffer);
+                  }
+
                   response_buffer = more_responses;
 
                   if response_buffer.is_empty() {
@@ -325,6 +381,7 @@ fn threaded_worker(port: u16, cpu_core: i32) {
 
             if io_state.peer_has_closed() {
                sys_call!(SYS_EPOLL_CTL as isize, epfd, EPOLL_CTL_DEL as isize, upstream_fd, 0);
+               let _ = tls_client_conn.complete_io(&mut sock);
             }
          }
       }
