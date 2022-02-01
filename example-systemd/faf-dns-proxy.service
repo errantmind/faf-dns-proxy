@@ -1,0 +1,16 @@
+[Unit]
+Description=FaF DNS over TLS Proxy/Forwarder (https://github.com/errantmind/faf-dns-proxy)
+After=network.target
+
+[Service]
+User=nobody
+Group=nogroup
+LimitNOFILE=8192
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+ExecStart=/usr/local/bin/faf-dns-proxy
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

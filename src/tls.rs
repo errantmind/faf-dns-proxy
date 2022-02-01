@@ -2,6 +2,26 @@ use crate::net;
 use std::net::TcpStream;
 use std::os::unix::prelude::FromRawFd;
 
+pub struct UpstreamState {
+   pub fd: isize,
+   pub tls_conn: rustls::ClientConnection,
+   pub sock: std::net::TcpStream,
+}
+
+#[inline]
+pub fn connect_helper(
+   tls_server_domain: &str,
+   tls_server_ip: &str,
+   tls_server_port: u16,
+   tls_client_config: &rustls::ClientConfig,
+) -> UpstreamState {
+   let mut tls_conn = get_tls_client(tls_server_domain, tls_client_config.clone());
+   let fd = net::tcp_connect(tls_server_ip, tls_server_port);
+   let mut sock = unsafe { std::net::TcpStream::from_raw_fd(fd as i32) };
+   complete_handshake(&mut tls_conn, &mut sock);
+   UpstreamState { fd, tls_conn, sock }
+}
+
 #[inline]
 pub fn get_tls_client_config() -> rustls::ClientConfig {
    let mut root_store = rustls::RootCertStore { roots: Vec::new() };
@@ -62,18 +82,4 @@ fn complete_handshake(client: &mut rustls::ClientConnection, sock: &mut TcpStrea
          panic!("complete_handshake FAILED: {}", res.err().unwrap());
       }
    }
-}
-
-#[inline]
-pub fn connect_helper(
-   tls_server_domain: &str,
-   tls_server_ip: &str,
-   tls_server_port: u16,
-   tls_client_config: &rustls::ClientConfig,
-) -> (rustls::ClientConnection, TcpStream, isize) {
-   let mut tls_client_conn = get_tls_client(tls_server_domain, tls_client_config.clone());
-   let upstream_fd = net::tcp_connect(tls_server_ip, tls_server_port);
-   let mut sock = unsafe { std::net::TcpStream::from_raw_fd(upstream_fd as i32) };
-   complete_handshake(&mut tls_client_conn, &mut sock);
-   (tls_client_conn, sock, upstream_fd)
 }

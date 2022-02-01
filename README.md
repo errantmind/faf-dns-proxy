@@ -1,32 +1,63 @@
-# FaF
-FaF (Fast as Fuck) is a Linux webserver written in Rust.
+# FaF DNS Proxy
+`FaF DNS Proxy` is a Linux (only) DoT proxy / forwarder written in Rust. It follows the design philosophy of the [FaF Web Server](https://www.github.com/errantmind/faf)
 
-FaF..
-* has one goal: to demonstrate the upper bound of single-node performance while remaining usable in a production setting.
-* is, perhaps, deceptively simple. FaF was designed to be easily understood while providing cutting edge performance. Each facet of FaF has been meticulously benchmarked and all design decisions were deliberate.
-* is open to community contributions that further improve its speed or eliminate redundancy
-* is open to issues that clearly demonstrate a security vulnerability.
-* has no Rust dependencies and can be converted into a `#![no_std]` project. See `Code Tour` below for more info. A side-benefit of this is a very small attack surface.
+## Why Use This?
+
+* You want the fastest DNS resolution available because you notice it speeds up your web browsing experience, among other areas
+* You don't want to use unencrypted DNS because you don't want your ISP spying on your traffic and selling it to third parties
+* You want something that 'just works' optimally out-of-the-box, with the default configuration, and you don't feel like configuring `systemd-resolved`, `unbound`, etc
+* Perhaps you have noticed occasional, mysterious delays that add 2-10 seconds to some page loads when using some other resolvers with DoT / DoH
+
+
+## How Does This Work?
+
+At a basic level:
+1. Your computer sends a DNS query (unencrypted) to FaF, which is running on your computer or another computer on your local network.
+2. FaF checks its cache to see if there is an unexpired entry
+3. If it is in the cache, FaF returns the answer immediately
+4. If it is not in the cache, FaF encrypts your request and sends it to (one or more) upstream DNS resolvers
+5. Upon receiving a response from an upstream DNS resolver, FaF answers your device's query
+
+## How To Use This?
+
+1. Clone this repository and build it using `cargo +nightly build --release`
+2. Stop your existing DNS resolver. See the next section for an example.
+3. Run the binary with elevated privileges so it can listen on port 53 (DNS)
+4. Navigate to some websites to check and see if it is working
+5. If it is working, disable your existing DNS resolver so it doesn't 'come back' (on reboot usually)
+6. If your linux distro uses systemd, check out the example service in this repo to enable it to run on boot. You'll probably want to copy the `faf-dns-proxy` binary somewhere first.
+
+If you have a problem, and suddenly realize you can't search the internet for answers anymore because your DNS is broken, just stop FaF and re-enable your previous DNS resolver.
+
+## Simple Setup for Distros Packaged with `systemd-resolved`
+
+* Follow the above steps. On step 2:
+   * Stop systemd-resolved with `sudo systemctl stop --now systemd-resolved.service`
+   * Ensure your DNS resolution is pointed at FaF: Make a backup of `/etc/resolv.conf`. Then make a new `/etc/resolv.conf`. If running FaF on your local computer, this should be the only thing in the file:
+
+```
+nameserver 127.0.0.1
+options no-check-names
+```
+* On step 5, disable systemd-resolved with `sudo systemctl disable --now systemd-resolved.service`
+
+
+
+## Features
+
+* 'Shotgun' DNS queries to multiple upstream resolvers by default. The first reply wins
+* Caching of DNS answers (using the TTL on the answer)
+* TLS Session caching (to avoid a full handshake when (re)connecting to upstream resolvers)
+* Event driven, asynchronous design. Avoids the extra latency of synchronous networking wherever possible
+* Designed to minimize the most latency intensive part of encrypted DNS: (re)connecting to upstream DNS resolvers. Instead of using a generic connection pool, FaF uses an event-activated thread for each upstream resolver, to ensure back-to-back requests reuse an existing connection upstream. This is important as most upstream resolvers unilaterally terminate connections after being idle for ~10 seconds, so we want to minimize reconnects by keeping established connections alive as long as possible
+
 
 ## Requirements and How-To
 
-FaF requires:
+FaF DNS Proxy requires:
 * linux x86_64
 * nightly Rust
 
-FaF recommends:
-* [clang-13 and lld-13](https://apt.llvm.org/) to be installed and available in PATH. The version (i.e. 13) may change over time as Rust's `rustc` updates its LLVM version. See the example project for recommended compiler flags.
-* to be run as root; it is not required though. FaF uses root to set process priority as well as a setting or two related to the socket options
-
-
-To use FaF for your own purposes, provide a callback which modifies the response buffer. The response buffer will always start empty and have a length as defined in the FaF project, so it is easy to ensure you do not write past this length. If you need more buffer, increase the value of the constant `RES_BUFF_SIZE` in this project. From the callback, return the number of bytes you wrote to the buffer. The callback will be called once per HTTP request. See the [FaF Example Project](https://github.com/errantmind/faf-example) for more information.
-
-## Design Principles
-1. Speed. Optimize for serving small to moderate payloads to a large number of concurrent connections. Speed will be balanced against over-specialization, like rewriting the entire project in hand-optimized assembly. Speed optimizations are constrained to unsafe Rust, unless the results of some alternative approach are overwhelmingly convincing.
-2. Elegance as Simplicity. Consistency in the architecture, project structure, idioms, and style. Some of these idioms and styling are particular to my taste. Will use a 'right tool for the right job' approach when choosing data structures and algorithms.
-3. Memory Safety. This being third is generally at odds with the Rust community, but if you have read all the text above you will understand. Memory safety is prioritized in-so-far as it has no decernable effect on performance. It should also be implemented in such a way that doesn't add excessive complexity / indirection in the project.
-
-(in that order)
 
 ## Code Tour
 

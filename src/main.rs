@@ -29,3 +29,8 @@ mod net;
 mod syscall;
 mod tls;
 pub mod util;
+
+
+pub fn main() {
+    epoll::go(5354);
+}

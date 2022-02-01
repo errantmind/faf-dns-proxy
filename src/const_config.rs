@@ -16,33 +16,6 @@ You should have received a copy of the GNU Affero General Public License
 along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
-#[macro_export(local_inner_macros)]
-macro_rules! const_concat_bytes {
-    () => {
-        ""
-    };
-    ($a:expr) => {
-        $a
-    };
-    ($a:expr, $b:expr) => {{
-        let bytes: &'static [u8] = unsafe {
-            &$crate::util::concat::<
-                [u8; $a.len()],
-                [u8; $b.len()],
-                [u8; $a.len() + $b.len()],
-            >($a, $b)
-        };
-
-        unsafe { $crate::util::transmute(bytes) }
-    }};
-    ($a:expr, $($rest:expr),*) => {{
-        pub const TAIL: &[u8] = const_concat_bytes!($($rest),*);
-        const_concat_bytes!($a, TAIL)
-    }};
-    ($a:expr, $($rest:expr),*,) => {
-        const_concat_bytes!($a, $($rest),*)
-    };
-}
 
 // faf spawns one thread per core, meaning each thread can handle 1024 connections
 pub const MAX_CONN: usize = 1024;
@@ -59,3 +32,5 @@ pub const EPOLL_TIMEOUT_MILLIS: isize = 1000;
 // 4096 bytes page size / 12 byte epoll_event size = ~340. This size reduces page faults
 pub const MAX_EPOLL_EVENTS_RETURNED: usize = 340;
 
+// isolate to core 0
+pub const CPU_CORE: usize = 0;

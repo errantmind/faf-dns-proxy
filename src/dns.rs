@@ -25,7 +25,6 @@ pub fn remove_tcp_dns_size_prefix(input: &mut [u8]) -> &mut [u8] {
 
 #[inline]
 pub fn get_query_unique_id<'a>(dns_buf_start: *const u8, len: usize) -> &'a [u8] {
-   // -> &[u8] {
    debug_assert!(len >= 19);
    unsafe {
       debug_assert_eq!(*dns_buf_start.add(4), 0u8);
