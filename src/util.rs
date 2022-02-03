@@ -156,6 +156,19 @@ pub fn set_limits(resource: u32, value: u32) -> isize {
    sys_call!(SYS_SETRLIMIT as isize, resource as isize, &limits as *const _ as _)
 }
 
+/// Attempt to set a higher process priority. -20 is the highest we can set on most distros.
+#[inline]
+pub fn set_maximum_process_priority() {
+   sys_call!(SYS_SETPRIORITY as isize, PRIO_PROCESS as isize, 0, -20);
+}
+
+/// Unshare the file descriptor table between threads to keep the fd number itself low, otherwise all
+/// threads will share the same file descriptor table. A single file descriptor table is problematic if
+/// we use file descriptors to index data structures
+pub fn unshare_file_descriptors() {
+   sys_call!(SYS_UNSHARE as isize, CLONE_FILES as isize);
+}
+
 /// Converts the internet host which is in network byte order, represented as a 32bit int
 /// to a str (in a byte buffer) in IPv4 dotted-decimal notation.
 ///
@@ -235,7 +248,6 @@ fn test_inet4_ntoa() {
    }
 }
 
-
 /// Converts str of an IP address representing an internet host to a 32-bit int which represents
 /// also represents the same IP address which is in network byte order
 ///
@@ -298,5 +310,3 @@ fn test_inet4_aton() {
       println!("{}", res);
    }
 }
-
-

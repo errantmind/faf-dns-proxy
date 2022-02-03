@@ -24,12 +24,11 @@ use crate::net;
 use crate::stats;
 use crate::sys_call;
 use crate::tls;
+use crate::util;
 
 use core::intrinsics::likely;
 use std::io::Read;
 use std::io::Write;
-
-use lazy_static::lazy_static;
 
 #[repr(C)]
 pub union epoll_data {
@@ -47,7 +46,7 @@ pub struct epoll_event {
 
 static mut STATS: [stats::Stats; UPSTREAM_DNS_SERVERS.len()] = stats::init_stats();
 
-lazy_static! {
+lazy_static::lazy_static! {
    static ref DNS_QUERY_CACHE: std::sync::Mutex<hasher::FaFHashMap<&'static [u8], Vec<u8>>> =
       std::sync::Mutex::new(hasher::FaFHashMap::default());
 
@@ -67,8 +66,7 @@ lazy_static! {
 
 #[inline(never)]
 pub fn go(port: u16) {
-   // Attempt to set a higher process priority, indicated by a negative number. -20 is the highest possible
-   sys_call!(SYS_SETPRIORITY as isize, PRIO_PROCESS as isize, 0, -19);
+   util::set_maximum_process_priority();
 
    let client_udp_socket = net::get_udp_server_socket(CPU_CORE_CLIENT_LISTENER as i32, INADDR_ANY, port);
 
@@ -213,9 +211,7 @@ pub fn go(port: u16) {
 }
 
 pub fn tls_worker(epfd: isize, itc_fd: isize, fd_client_udp_listener: isize, upstream_server: &UpstreamDnsServer) {
-   // Unshare the file descriptor table between threads to keep the fd number itself low, otherwise all
-   // threads will share the same file descriptor table
-   sys_call!(SYS_UNSHARE as isize, CLONE_FILES as isize);
+   util::unshare_file_descriptors();
 
    let epoll_events: [epoll_event; MAX_EPOLL_EVENTS_RETURNED] = unsafe { core::mem::zeroed() };
    let epoll_events_ptr = &epoll_events as *const _ as isize;
@@ -263,6 +259,8 @@ pub fn tls_worker(epfd: isize, itc_fd: isize, fd_client_udp_listener: isize, ups
          EPOLL_TIMEOUT_MILLIS
       );
 
+      let mut upstream_dns_conn_good_state = true;
+
       for index in 0..num_incoming_events {
          let cur_fd = unsafe { (*epoll_events.get_unchecked(index as usize)).data.fd } as isize;
 
@@ -306,9 +304,10 @@ pub fn tls_worker(epfd: isize, itc_fd: isize, fd_client_udp_listener: isize, ups
                   unsafe { core::slice::from_raw_parts_mut(buf_itc_in.as_mut_ptr(), read_client as usize + 2) };
 
                match upstream_state.tls_conn.writer().write_all(query_slice_with_len_added) {
-                  Ok(_) => (), //println!("write_all {} bytes", query_slice_with_len_added.len()),
-                  Err(error) => println!("write_all failed with error {}", error),
+                  Ok(_) => (),
+                  Err(error) => continue,
                }
+
                match upstream_state.tls_conn.write_tls(&mut upstream_state.sock) {
                   Ok(_) => {}
                   Err(error) => {
@@ -352,22 +351,23 @@ pub fn tls_worker(epfd: isize, itc_fd: isize, fd_client_udp_listener: isize, ups
                   }
                }
             }
-         } else if cur_fd == upstream_state.fd as isize {
+         } else if cur_fd == upstream_state.fd && upstream_dns_conn_good_state == true {
             match upstream_state.tls_conn.read_tls(&mut upstream_state.sock) {
                Err(error) => {
                   if error.kind() == std::io::ErrorKind::WouldBlock {
-                     println!("WouldBlock");
                      continue;
                   }
-                  println!("TLS read error on core {}: {:?}", CPU_CORE_CLIENT_LISTENER, error);
+
                   sys_call!(SYS_EPOLL_CTL as isize, epfd, EPOLL_CTL_DEL as isize, upstream_state.fd, 0);
+                  let _ = upstream_state.tls_conn.complete_io(&mut upstream_state.sock);
+                  upstream_dns_conn_good_state = false;
                   continue;
                }
 
                Ok(0) => {
-                  println!("EOF, handling connection close upstream_state.fd on core {}", CPU_CORE_CLIENT_LISTENER);
                   sys_call!(SYS_EPOLL_CTL as isize, epfd, EPOLL_CTL_DEL as isize, upstream_state.fd, 0);
                   let _ = upstream_state.tls_conn.complete_io(&mut upstream_state.sock);
+                  upstream_dns_conn_good_state = false;
                   continue;
                }
 
@@ -377,6 +377,8 @@ pub fn tls_worker(epfd: isize, itc_fd: isize, fd_client_udp_listener: isize, ups
             let io_state = match upstream_state.tls_conn.process_new_packets() {
                Ok(io_state) => io_state,
                Err(err) => {
+                  sys_call!(SYS_EPOLL_CTL as isize, epfd, EPOLL_CTL_DEL as isize, upstream_state.fd, 0);
+                  upstream_dns_conn_good_state = false;
                   println!("TLS error: {:?}", err);
                   continue;
                }
@@ -440,6 +442,7 @@ pub fn tls_worker(epfd: isize, itc_fd: isize, fd_client_udp_listener: isize, ups
             if io_state.peer_has_closed() {
                sys_call!(SYS_EPOLL_CTL as isize, epfd, EPOLL_CTL_DEL as isize, upstream_state.fd, 0);
                let _ = upstream_state.tls_conn.complete_io(&mut upstream_state.sock);
+               upstream_dns_conn_good_state = false;
             }
          }
       }
