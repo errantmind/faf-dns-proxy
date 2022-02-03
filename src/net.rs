@@ -45,6 +45,8 @@ pub struct sockaddr_in {
 }
 
 impl sockaddr_in {
+   // Assumes bytes for port and s_addr are in network byte order already
+   #[inline]
    pub fn new(sin_family: u16, sin_port: u16, s_addr: u32) -> Self {
       Self {
          sin_family,
@@ -53,6 +55,11 @@ impl sockaddr_in {
          sin_zero: unsafe { core::mem::MaybeUninit::zeroed().assume_init() },
       }
    }
+}
+
+pub struct UdpSocket {
+   pub fd: isize,
+   pub addr: sockaddr_in,
 }
 
 #[repr(C, align(16))]
@@ -65,20 +72,16 @@ const OPTVAL: isize = 1;
 
 const O_NONBLOCK: isize = 2048;
 const F_SETFL: isize = 4;
-const SOCK_LEN: u32 = core::mem::size_of::<sockaddr_in>() as u32;
+pub const SOCKADDR_IN_LEN: u32 = core::mem::size_of::<sockaddr_in>() as u32;
 
 #[inline]
-pub fn get_addr(host: u32, port: u16) -> sockaddr_in {
-   sockaddr_in {
-      sin_family: AF_INET as u16,
-      sin_port: htons(port),
-      sin_addr: in_addr { s_addr: host },
-      sin_zero: unsafe { core::mem::zeroed() },
+pub fn get_udp_server_socket(cpu_core: i32, host: u32, port: u16) -> UdpSocket {
+   let fd = sys_call!(SYS_SOCKET as isize, AF_INET as isize, SOCK_DGRAM as isize, IPPROTO_UDP as isize);
+
+   if fd < 0 {
+      panic!("SYS_SOCKET AF_INET SOCK_DGRAM IPPROTO_UDP");
    }
-}
 
-#[inline]
-pub fn bind_socket(fd: isize, host: u32, port: u16) -> sockaddr_in {
    let size_of_optval = core::mem::size_of_val(&OPTVAL) as u32;
 
    let res = sys_call!(
@@ -107,39 +110,28 @@ pub fn bind_socket(fd: isize, host: u32, port: u16) -> sockaddr_in {
       panic!("SYS_SETSOCKOPT SO_REUSEPORT");
    }
 
-   let addr = get_addr(host, port);
-
-   let res = sys_call!(SYS_BIND as isize, fd, &addr as *const _ as _, SOCK_LEN as isize);
-
-   if res < 0 {
-      panic!("SYS_BIND");
-   }
-
-   addr
-}
-
-#[inline]
-pub fn get_udp_socket(core: i32) -> isize {
-   let fd = sys_call!(SYS_SOCKET as isize, AF_INET as isize, SOCK_DGRAM as isize, IPPROTO_UDP as isize);
-
-   if core >= 0 {
+   if cpu_core >= 0 {
       sys_call!(
          SYS_SETSOCKOPT as isize,
          fd,
          SOL_SOCKET as isize,
          SO_INCOMING_CPU as isize,
-         &core as *const _ as _,
-         core::mem::size_of_val(&core) as isize
+         &cpu_core as *const _ as _,
+         core::mem::size_of_val(&cpu_core) as isize
       );
    }
 
-   if fd < 0 {
-      panic!("SYS_SOCKET");
+   let addr = sockaddr_in::new(AF_INET as u16, htons(port), htonl(host));
+
+   let res = sys_call!(SYS_BIND as isize, fd, &addr as *const _ as _, SOCKADDR_IN_LEN as isize);
+
+   if res < 0 {
+      panic!("SYS_BIND");
    }
 
-   println!("listener fd = {}", fd);
+   println!("udp listener fd = {}", fd);
 
-   fd
+   UdpSocket { fd, addr }
 }
 
 #[inline]
@@ -251,7 +243,7 @@ pub fn tcp_connect(host_ip: &str, port: u16) -> isize {
          sin_zero: core::mem::zeroed(),
       };
 
-      let res = sys_call!(SYS_CONNECT as isize, fd, &addr as *const _ as isize, SOCK_LEN as isize);
+      let res = sys_call!(SYS_CONNECT as isize, fd, &addr as *const _ as isize, SOCKADDR_IN_LEN as isize);
       if res < 0 {
          panic!("SYS_CONNECT, {}", res);
       }
@@ -280,98 +272,4 @@ pub fn tcp_connect(host_ip: &str, port: u16) -> isize {
 
       fd
    }
-}
-
-#[inline]
-pub fn tcp_reconnect(fd: isize, addr: &sockaddr_in) -> bool {
-   sys_call!(SYS_CONNECT as isize, fd, addr as *const _ as isize, SOCK_LEN as isize) >= 0
-}
-
-// #[inline]
-// pub fn setup_connection(fd: isize, core: i32) {
-//    //Doesn't help with throughput, just latency per request, and may actually reduce throughput.
-//    //May be Useful for this test. I'm not entirely convinced though
-//    sys_call!(
-//       SYS_SETSOCKOPT as isize,
-//       fd,
-//       IPPROTO_TCP as isize,
-//       TCP_NODELAY as isize,
-//       &OPTVAL as *const _ as _,
-//       core::mem::size_of_val(&OPTVAL) as isize
-//    );
-
-//    sys_call!(
-//       SYS_SETSOCKOPT as isize,
-//       fd,
-//       IPPROTO_TCP as isize,
-//       TCP_QUICKACK as isize,
-//       &OPTVAL as *const _ as _,
-//       core::mem::size_of_val(&OPTVAL) as isize
-//    );
-
-//    // This can be disabled if we are passed, say, '-1' for times we don't want to assign a core affinity
-//    #[allow(clippy::collapsible_if)]
-//    if core >= 0 {
-//       sys_call!(
-//          SYS_SETSOCKOPT as isize,
-//          fd,
-//          SOL_SOCKET as isize,
-//          SO_INCOMING_CPU as isize,
-//          &core as *const _ as _,
-//          core::mem::size_of_val(&core) as isize
-//       );
-//    }
-
-//    //https://stackoverflow.com/a/49900878
-//    // sys_call!(
-//    //    SYS_SETSOCKOPT as isize,
-//    //    fd as isize,
-//    //    SOL_SOCKET as isize,
-//    //    SO_ZEROCOPY as isize,
-//    //    &OPTVAL as *const isize as _,
-//    //    core::mem::size_of_val(&OPTVAL) as isize
-//    // );
-
-//    // Only useful when using blocking reads, not non-blocking reads as I am
-//    // const OPTVAL_BUSYPOLL: isize = 50;
-//    // sys_call!(
-//    //    SYS_SETSOCKOPT as isize,
-//    //    fd,
-//    //    SOL_SOCKET as isize,
-//    //    SO_BUSY_POLL as isize,
-//    //    &OPTVAL_BUSYPOLL as *const _ as _,
-//    //    core::mem::size_of_val(&OPTVAL_BUSYPOLL) as isize
-//    // );
-
-//    sys_call!(SYS_FCNTL as isize, fd as isize, F_SETFL, O_NONBLOCK);
-// }
-
-// #[inline]
-// pub fn set_blocking(fd: isize) {
-//    sys_call!(SYS_FCNTL as isize, fd as isize, F_SETFL, 0);
-// }
-
-// #[inline]
-// pub fn set_nonblocking(fd: isize) {
-//    sys_call!(SYS_FCNTL as isize, fd as isize, F_SETFL, O_NONBLOCK);
-// }
-
-#[inline(always)]
-pub fn close_connection(epfd: isize, fd: isize) {
-   const OPTVAL_SOLINGER_TIMEOUT: linger = linger { l_onoff: 1, l_linger: 0 };
-   sys_call!(
-      SYS_SETSOCKOPT as isize,
-      fd,
-      SOL_SOCKET as isize,
-      SO_LINGER as isize,
-      &OPTVAL_SOLINGER_TIMEOUT as *const _ as _,
-      core::mem::size_of_val(&OPTVAL_SOLINGER_TIMEOUT) as isize
-   );
-
-   // Could defer deletes for performance reasons. Wouldn't cause problems as fds are reused. Not going to do this as it would
-   // require tracking fd state more granually to avoid the wasted EPOLL_CTL_ADD when new connections come in. I don't know
-   // how much of a benefit, performance-wise I'd get
-   sys_call!(SYS_EPOLL_CTL as isize, epfd, EPOLL_CTL_DEL as isize, fd, 0);
-
-   sys_call!(SYS_CLOSE as isize, fd);
 }

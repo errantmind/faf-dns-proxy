@@ -1,3 +1,4 @@
+use crate::const_config::*;
 use crate::net;
 use std::net::TcpStream;
 use std::os::unix::prelude::FromRawFd;
@@ -10,13 +11,13 @@ pub struct UpstreamState {
 
 #[inline]
 pub fn connect_helper(
-   tls_server_domain: &str,
-   tls_server_ip: &str,
+   upstream_server: &UpstreamDnsServer,
+
    tls_server_port: u16,
    tls_client_config: &rustls::ClientConfig,
 ) -> UpstreamState {
-   let mut tls_conn = get_tls_client(tls_server_domain, tls_client_config.clone());
-   let fd = net::tcp_connect(tls_server_ip, tls_server_port);
+   let mut tls_conn = get_tls_client(upstream_server.0, tls_client_config.clone());
+   let fd = net::tcp_connect(upstream_server.1, tls_server_port);
    let mut sock = unsafe { std::net::TcpStream::from_raw_fd(fd as i32) };
    complete_handshake(&mut tls_conn, &mut sock);
    UpstreamState { fd, tls_conn, sock }

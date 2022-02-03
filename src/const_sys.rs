@@ -597,9 +597,6 @@ pub const SO_RCVTIMEO_NEW: i32 = 66;
 pub const SO_SNDTIMEO_NEW: i32 = 67;
 pub const SO_DETACH_REUSEPORT_BPF: i32 = 68;
 
-pub const SOCK_STREAM: i32 = 1;
-pub const SOCK_DGRAM: i32 = 2;
-
 pub const IPPROTO_TCP: i32 = 6;
 pub const TCP_NODELAY: i32 = 1;
 pub const TCP_MAXSEG: i32 = 2;
@@ -678,8 +675,29 @@ pub const RLIMIT_RTTIME: u32 = 15;
 pub const RLIM_NLIMITS: u32 = 16;
 
 // TCP/UDP
-pub const AF_INET: i32 = 2;
 pub const IPPROTO_UDP: u32 = 17;
 pub const IPPROTO_UDPLITE: u32 = 136;
 pub const UDPLITE_SEND_CSCOV: u32 = 10;
 pub const UDPLITE_RECV_CSCOV: u32 = 11;
+
+// Socket types
+pub const SOCK_STREAM: u32 = 1;
+pub const SOCK_DGRAM: u32 = 2;
+pub const SOCK_RAW: u32 = 3;
+pub const SOCK_RDM: u32 = 4;
+pub const SOCK_SEQPACKET: u32 = 5;
+pub const SOCK_PACKET: u32 = 10;
+
+// Address families.
+pub const AF_UNSPEC: u32 = 0;
+pub const AF_UNIX: u32 = 1;
+pub const AF_INET: u32 = 2;
+pub const AF_AX25: u32 = 3;
+pub const AF_IPX: u32 = 4;
+pub const AF_APPLETALK: u32 = 5;
+pub const AF_NETROM: u32 = 6;
+pub const AF_BRIDGE: u32 = 7;
+pub const AF_AAL5: u32 = 8;
+pub const AF_X25: u32 = 9;
+pub const AF_INET6: u32 = 10;
+pub const AF_MAX: u32 = 12;

@@ -9,7 +9,7 @@ default = []
 
 [dependencies]
 #dnsparse = "*"
-
+lazy_static = "*"
 dns-parser = "*"
 rustls = "*"
 webpki-roots = "*"

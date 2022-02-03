@@ -17,8 +17,9 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
 
-// faf spawns one thread per core, meaning each thread can handle 1024 connections
-pub const MAX_CONN: usize = 1024;
+// faf spawns one thread per core, meaning each thread can handle 1024 connections. 
+// If we don't UNSHARE, then we can only handle 'n' total connections across all threads (instead of 'each')
+pub const MAX_CONN: usize = 64;
 
 // the buffer size of the request buffer. Currently set to 4096 bytes (most common page size)
 pub const REQ_BUFF_SIZE: usize = 4096;
@@ -33,4 +34,12 @@ pub const EPOLL_TIMEOUT_MILLIS: isize = 1000;
 pub const MAX_EPOLL_EVENTS_RETURNED: usize = 340;
 
 // isolate to core 0
-pub const CPU_CORE: usize = 0;
+pub const CPU_CORE_CLIENT_LISTENER: usize = 0;
+
+pub struct UpstreamDnsServer(pub &'static str, pub &'static str);
+pub const UPSTREAM_DNS_SERVERS: [UpstreamDnsServer; 4] = [
+   UpstreamDnsServer("one.one.one.one", "1.1.1.1"),
+   UpstreamDnsServer("one.one.one.one", "1.0.0.1"),
+   UpstreamDnsServer("dns.google", "8.8.8.8"),
+   UpstreamDnsServer("dns.google", "8.8.4.4"),
+];

@@ -41,6 +41,7 @@ name = "faf-dns-proxy"
 version = "0.1.0"
 dependencies = [
  "dns-parser",
+ "lazy_static",
  "rustls",
  "webpki-roots",
 ]

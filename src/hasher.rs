@@ -8,7 +8,7 @@ pub type FaFBuildHasher = BuildHasherDefault<FaFHasher>;
 pub type FaFHashMap<K, V> = HashMap<K, V, FaFBuildHasher>;
 pub type FaFHashSet<V> = HashSet<V, FaFBuildHasher>;
 
-// murmurhash, but used here incorrectly to mix bits
+// murmurhash to mix bits, but used here 'incorrectly' as a hashing algorithm
 #[inline]
 fn hash_naive(mut to_hash: u64) -> u64 {
    to_hash ^= to_hash >> 33;

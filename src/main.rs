@@ -16,21 +16,29 @@ You should have received a copy of the GNU Affero General Public License
 along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
-#![allow(clippy::missing_safety_doc, clippy::uninit_assumed_init, uninit_vec, dead_code)]
-#![feature(const_fn_trait_bound, const_size_of_val, core_intrinsics, ptr_const_cast, const_mut_refs)]
+#![allow(clippy::missing_safety_doc, clippy::uninit_assumed_init, dead_code)]
+#![feature(
+   const_fn_trait_bound,
+   const_size_of_val,
+   core_intrinsics,
+   ptr_const_cast,
+   const_mut_refs,
+   const_for,
+   inline_const
+)]
 
-pub mod const_config;
+mod const_config;
 mod const_sys;
 mod dns;
-pub mod epoll;
-pub mod hasher;
+mod epoll;
+mod hasher;
 mod http_content_length;
 mod net;
+mod stats;
 mod syscall;
 mod tls;
-pub mod util;
-
+mod util;
 
 pub fn main() {
-    epoll::go(5354);
+   epoll::go(5354);
 }
