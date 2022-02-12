@@ -165,6 +165,7 @@ pub fn set_maximum_process_priority() {
 /// Unshare the file descriptor table between threads to keep the fd number itself low, otherwise all
 /// threads will share the same file descriptor table. A single file descriptor table is problematic if
 /// we use file descriptors to index data structures
+#[inline]
 pub fn unshare_file_descriptors() {
    sys_call!(SYS_UNSHARE as isize, CLONE_FILES as isize);
 }

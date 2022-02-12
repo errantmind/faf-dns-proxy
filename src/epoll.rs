@@ -121,12 +121,13 @@ pub fn go(port: u16) {
    }
 
    let epoll_events: [epoll_event; MAX_EPOLL_EVENTS_RETURNED] = unsafe { core::mem::zeroed() };
-   let epoll_events_ptr = &epoll_events as *const _ as isize;
+   let epoll_events_start_address = epoll_events.as_ptr() as isize;
+
    let mut saved_event_in_only: epoll_event = unsafe { core::mem::zeroed() };
    saved_event_in_only.events = EPOLLIN;
 
    let buf_client_request: [u8; REQ_BUFF_SIZE] = unsafe { core::mem::zeroed() };
-   let buf_client_request_start_address = &buf_client_request as *const _ as isize;
+   let buf_client_request_start_address = buf_client_request.as_ptr() as isize;
 
    let client_addr: net::sockaddr_in = unsafe { core::mem::zeroed() };
    let client_socket_len = net::SOCKADDR_IN_LEN;
@@ -135,7 +136,7 @@ pub fn go(port: u16) {
       let num_incoming_events = sys_call!(
          SYS_EPOLL_WAIT as isize,
          epfd,
-         epoll_events_ptr,
+         epoll_events_start_address,
          MAX_EPOLL_EVENTS_RETURNED as isize,
          EPOLL_TIMEOUT_MILLIS
       );
@@ -214,7 +215,7 @@ pub fn tls_worker(epfd: isize, itc_fd: isize, fd_client_udp_listener: isize, ups
    util::unshare_file_descriptors();
 
    let epoll_events: [epoll_event; MAX_EPOLL_EVENTS_RETURNED] = unsafe { core::mem::zeroed() };
-   let epoll_events_ptr = &epoll_events as *const _ as isize;
+   let epoll_events_ptr = epoll_events.as_ptr() as isize;
    let mut saved_event_in_only: epoll_event = unsafe { core::mem::zeroed() };
    saved_event_in_only.events = EPOLLIN;
 
@@ -248,7 +249,7 @@ pub fn tls_worker(epfd: isize, itc_fd: isize, fd_client_udp_listener: isize, ups
    }
 
    let mut buf_itc_in: [u8; REQ_BUFF_SIZE] = unsafe { core::mem::zeroed() };
-   let buf_itc_in_start_address = &buf_itc_in as *const _ as isize;
+   let buf_itc_in_start_address = buf_itc_in.as_ptr() as isize;
 
    loop {
       let num_incoming_events = sys_call!(
