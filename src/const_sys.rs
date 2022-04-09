@@ -16,6 +16,8 @@ You should have received a copy of the GNU Affero General Public License
 along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
+#![allow(dead_code)]
+
 // Manually transformed from /usr/include/x86_64-linux-gnu/asm/unistd_64.h
 
 pub const SYS_READ: u32 = 0;

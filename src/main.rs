@@ -16,7 +16,7 @@ You should have received a copy of the GNU Affero General Public License
 along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
-#![allow(clippy::missing_safety_doc, clippy::uninit_assumed_init, dead_code)]
+#![allow(clippy::missing_safety_doc, clippy::uninit_assumed_init)]
 #![feature(
    const_fn_trait_bound,
    const_size_of_val,
@@ -31,11 +31,9 @@ mod const_config;
 mod const_sys;
 mod dns;
 mod epoll;
-mod hasher;
-mod http_content_length;
+mod u64toa;
 mod net;
 mod stats;
-mod syscall;
 mod tls;
 mod util;
 

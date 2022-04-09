@@ -8,8 +8,10 @@ edition = "2021"
 default = []
 
 [dependencies]
+faf-syscall = "*"
 #dnsparse = "*"
 lazy_static = "*"
 dns-parser = "*"
 rustls = "*"
 webpki-roots = "*"
+hashbrown = "*"

@@ -12,6 +12,14 @@ Currently, the TTL is IGNORED and all IPs are cached indefinitely. This actually
 * You want something that 'just works' optimally out-of-the-box, with the default configuration, and you don't feel like configuring `systemd-resolved`, `unbound`, etc
 * Perhaps you have noticed occasional, mysterious delays that add 2-10 seconds to some page loads when using some other resolvers with DoT / DoH
 
+## Features
+
+* 'Shotgun' DNS queries to multiple upstream resolvers by default. The first reply wins
+* Caching of DNS answers (using the TTL on the answer)
+* TLS Session caching (to avoid a full handshake when (re)connecting to upstream resolvers)
+* Event driven, asynchronous design. Avoids the extra latency of synchronous networking wherever possible
+* Designed to minimize the most latency intensive part of encrypted DNS: (re)connecting to upstream DNS resolvers. Instead of using a generic connection pool, FaF uses an event-activated thread for each upstream resolver, to ensure back-to-back requests reuse an existing connection upstream. This is important as most upstream resolvers unilaterally terminate connections after being idle for ~10 seconds, so we want to minimize reconnects by keeping established connections alive as long as possible
+
 
 ## How Does This Work?
 
@@ -46,16 +54,6 @@ options no-check-names
 * On step 5, disable systemd-resolved with `sudo systemctl disable --now systemd-resolved.service`
 
 
-
-## Features
-
-* 'Shotgun' DNS queries to multiple upstream resolvers by default. The first reply wins
-* Caching of DNS answers (using the TTL on the answer)
-* TLS Session caching (to avoid a full handshake when (re)connecting to upstream resolvers)
-* Event driven, asynchronous design. Avoids the extra latency of synchronous networking wherever possible
-* Designed to minimize the most latency intensive part of encrypted DNS: (re)connecting to upstream DNS resolvers. Instead of using a generic connection pool, FaF uses an event-activated thread for each upstream resolver, to ensure back-to-back requests reuse an existing connection upstream. This is important as most upstream resolvers unilaterally terminate connections after being idle for ~10 seconds, so we want to minimize reconnects by keeping established connections alive as long as possible
-
-
 ## Requirements and How-To
 
 FaF DNS Proxy requires:
@@ -65,9 +63,8 @@ FaF DNS Proxy requires:
 
 ## Code Tour
 
-Just look at `epoll.rs`, everything is either there or referenced there and, even then, it is only ~200 lines of code.
+Just look at `epoll.rs`, everything is either there or referenced there.
 
-Aside: a `no_std` version of this project compiles to a total of only ~400 lines of assembly TEXT, and 7KB binary, although it takes a few modifications to get there: the only real dependency on std is threading, so if we eliminate it and change to a `1 process per core` model instead of `1 thread per core` we get a very minimal setup. The performance is ~1% worse. If you are interested in this, let's discuss.
 
 ## Contributions
 Contributions are welcome, but please discuss before submitting a pull request. If a discussion leads to a pull request, please reference the \#issue in the pull request. Unsolicited pull requests will not be reviewed nor merged.

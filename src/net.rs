@@ -18,7 +18,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 use crate::const_config::*;
 use crate::const_sys::*;
-use crate::sys_call;
+use faf_syscall::sys_call;
 use crate::util;
 
 #[inline(always)]

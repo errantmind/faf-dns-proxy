@@ -16,8 +16,8 @@ You should have received a copy of the GNU Affero General Public License
 along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 use crate::const_sys::*;
-use crate::http_content_length;
-use crate::sys_call;
+use crate::u64toa;
+use faf_syscall::sys_call;
 
 const DOT: u8 = b'.';
 
@@ -204,25 +204,25 @@ pub unsafe fn inet4_ntoa(s_addr: u32, out_buff_start: *mut u8) -> usize {
    let s_addr_start_ptr = &s_addr as *const u32 as *const u8;
    let mut output_byte_walker = out_buff_start;
 
-   output_byte_walker = output_byte_walker.add(http_content_length::u8toa(output_byte_walker, *s_addr_start_ptr));
+   output_byte_walker = output_byte_walker.add(u64toa::u8toa(output_byte_walker, *s_addr_start_ptr));
 
    *output_byte_walker = DOT;
    output_byte_walker = output_byte_walker.add(1);
 
    output_byte_walker =
-      output_byte_walker.add(http_content_length::u8toa(output_byte_walker, *(s_addr_start_ptr.add(1))));
+      output_byte_walker.add(u64toa::u8toa(output_byte_walker, *(s_addr_start_ptr.add(1))));
 
    *output_byte_walker = DOT;
    output_byte_walker = output_byte_walker.add(1);
 
    output_byte_walker =
-      output_byte_walker.add(http_content_length::u8toa(output_byte_walker, *(s_addr_start_ptr.add(2))));
+      output_byte_walker.add(u64toa::u8toa(output_byte_walker, *(s_addr_start_ptr.add(2))));
 
    *output_byte_walker = DOT;
    output_byte_walker = output_byte_walker.add(1);
 
    output_byte_walker =
-      output_byte_walker.add(http_content_length::u8toa(output_byte_walker, *(s_addr_start_ptr.add(3))));
+      output_byte_walker.add(u64toa::u8toa(output_byte_walker, *(s_addr_start_ptr.add(3))));
 
    output_byte_walker as usize - out_buff_start as usize
 }

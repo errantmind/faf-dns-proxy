@@ -1,5 +1,7 @@
 use crate::const_config::*;
 use crate::net;
+
+use hashbrown::HashMap;
 use std::net::TcpStream;
 use std::os::unix::prelude::FromRawFd;
 
@@ -46,12 +48,12 @@ pub fn get_tls_client(server_domain_name: &str, client_config: rustls::ClientCon
 }
 
 pub struct PersistCache {
-   pub cache: std::sync::Mutex<std::collections::HashMap<Vec<u8>, Vec<u8>>>,
+   pub cache: std::sync::Mutex<HashMap<Vec<u8>, Vec<u8>>>,
 }
 
 impl PersistCache {
    fn new() -> Self {
-      PersistCache { cache: std::sync::Mutex::new(std::collections::HashMap::new()) }
+      PersistCache { cache: std::sync::Mutex::new(HashMap::new()) }
    }
 
    fn len(&self) -> Option<usize> {

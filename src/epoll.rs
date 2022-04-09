@@ -19,16 +19,18 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 use crate::const_config::*;
 use crate::const_sys::*;
 use crate::dns;
-use crate::hasher;
 use crate::net;
 use crate::stats;
-use crate::sys_call;
 use crate::tls;
 use crate::util;
+use crate::util::get_num_logical_cpus;
 
 use core::intrinsics::likely;
 use std::io::Read;
 use std::io::Write;
+
+use faf_syscall::sys_call;
+use hashbrown::HashMap;
 
 #[repr(C)]
 pub union epoll_data {
@@ -47,8 +49,8 @@ pub struct epoll_event {
 static mut STATS: [stats::Stats; UPSTREAM_DNS_SERVERS.len()] = stats::init_stats();
 
 lazy_static::lazy_static! {
-   static ref DNS_QUERY_CACHE: std::sync::Mutex<hasher::FaFHashMap<&'static [u8], Vec<u8>>> =
-      std::sync::Mutex::new(hasher::FaFHashMap::default());
+   static ref DNS_QUERY_CACHE: std::sync::Mutex<HashMap<&'static [u8], Vec<u8>>> =
+      std::sync::Mutex::new(HashMap::default());
 
    // We route DNS responses by the id they provided in the initial request. This may occasionally cause
    // timing collisions but they should be very rare. There is a 1 / 2^16 chance of a collision, but even then
@@ -87,6 +89,7 @@ pub fn go(port: u16) {
       itc_client_sockets.push(sockets[1]);
    }
 
+   let num_cpus = get_num_logical_cpus();
    for i in 0..UPSTREAM_DNS_SERVERS.len() {
       let upstream_worker_epfd = upstream_worker_epfds[i];
       let itc_fd = itc_server_sockets[i];
@@ -94,6 +97,8 @@ pub fn go(port: u16) {
       let thread_name = format!("faf{}", UPSTREAM_DNS_SERVERS[i].1);
       let thread_builder = std::thread::Builder::new().name(thread_name).stack_size(1024 * 1024 * 1);
       let _ = thread_builder.spawn(move || {
+         util::unshare_file_descriptors();
+         util::set_current_thread_cpu_affinity_to(i % num_cpus);
          tls_worker(upstream_worker_epfd, itc_fd as isize, client_udp_socket_fd, &UPSTREAM_DNS_SERVERS[i]);
       });
    }
@@ -197,7 +202,7 @@ pub fn go(port: u16) {
                // Write to ITC sockets for upstream DNS resolution
                {
                   for unix_socket in itc_client_sockets.iter() {
-                     let wrote = sys_call!(
+                     let _ = sys_call!(
                         SYS_WRITE as isize,
                         *unix_socket as isize,
                         buf_client_request_start_address,
@@ -212,8 +217,6 @@ pub fn go(port: u16) {
 }
 
 pub fn tls_worker(epfd: isize, itc_fd: isize, fd_client_udp_listener: isize, upstream_server: &UpstreamDnsServer) {
-   util::unshare_file_descriptors();
-
    let epoll_events: [epoll_event; MAX_EPOLL_EVENTS_RETURNED] = unsafe { core::mem::zeroed() };
    let epoll_events_ptr = epoll_events.as_ptr() as isize;
    let mut saved_event_in_only: epoll_event = unsafe { core::mem::zeroed() };
@@ -306,12 +309,12 @@ pub fn tls_worker(epfd: isize, itc_fd: isize, fd_client_udp_listener: isize, ups
 
                match upstream_state.tls_conn.writer().write_all(query_slice_with_len_added) {
                   Ok(_) => (),
-                  Err(error) => continue,
+                  Err(_) => continue,
                }
 
                match upstream_state.tls_conn.write_tls(&mut upstream_state.sock) {
                   Ok(_) => {}
-                  Err(error) => {
+                  Err(_) => {
                      sys_call!(SYS_EPOLL_CTL as isize, epfd, EPOLL_CTL_DEL as isize, upstream_state.fd, 0);
                      upstream_state = tls::connect_helper(upstream_server, 853, &tls_client_config);
 
