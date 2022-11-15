@@ -78,7 +78,7 @@ pub fn go(port: u16) {
       upstream_worker_epfds.push(upstream_worker_epfd);
    }
 
-   // Note, 'itc' = 'inter-thread communication'
+   // Note, 'itc' == 'inter-thread communication'
    let mut itc_server_sockets = Vec::with_capacity(UPSTREAM_DNS_SERVERS.len());
    let mut itc_client_sockets = Vec::with_capacity(UPSTREAM_DNS_SERVERS.len());
    for _ in 0..UPSTREAM_DNS_SERVERS.len() {
@@ -97,18 +97,13 @@ pub fn go(port: u16) {
       let thread_name = format!("faf{}", UPSTREAM_DNS_SERVERS[i].1);
       let thread_builder = std::thread::Builder::new().name(thread_name).stack_size(1024 * 1024 * 1);
       let _ = thread_builder.spawn(move || {
+         // Unshare the file descriptor table between threads to keep the fd number itself low, otherwise all
+         // threads will share the same file descriptor table
          util::unshare_file_descriptors();
          util::set_current_thread_cpu_affinity_to(i % num_cpus);
          tls_worker(upstream_worker_epfd, itc_fd as isize, client_udp_socket_fd, &UPSTREAM_DNS_SERVERS[i]);
       });
    }
-
-   // Unshare the file descriptor table between threads to keep the fd number itself low, otherwise all
-   //       // threads will share the same file descriptor table
-   //sys_call!(SYS_UNSHARE as isize, CLONE_FILES as isize);
-
-   //util::set_current_thread_cpu_affinity_to(CPU_CORE);
-   //util::set_limits(RLIMIT_STACK, 1024 * 1024 * 16);
 
    let epfd = sys_call!(SYS_EPOLL_CREATE1 as isize, 0);
 
@@ -165,10 +160,10 @@ pub fn go(port: u16) {
 
                // Extract just the id from the client request
                let id = dns::get_id_big_endian(buf_client_request.as_ptr(), read_client as usize);
-               let unique_query_name = dns::get_query_unique_id(buf_client_request.as_ptr(), read_client as usize);
 
                // Scope for cache guard
                {
+                  let unique_query_name = dns::get_query_unique_id(buf_client_request.as_ptr(), read_client as usize);
                   let mut cache_guard = DNS_QUERY_CACHE.lock().unwrap();
                   let cached_response_maybe = cache_guard.get_mut(unique_query_name);
 
@@ -236,17 +231,17 @@ pub fn tls_worker(epfd: isize, itc_fd: isize, fd_client_udp_listener: isize, ups
    }
 
    let tls_client_config = tls::get_tls_client_config();
-   let mut upstream_state = tls::connect_helper(upstream_server, 853, &tls_client_config);
+   let mut tls_connection = tls::connect_helper(upstream_server, 853, &tls_client_config);
 
    // Add tls socket to epoll for monitoring
    {
-      saved_event_in_only.data.fd = upstream_state.fd as i32;
+      saved_event_in_only.data.fd = tls_connection.fd as i32;
 
       sys_call!(
          SYS_EPOLL_CTL as isize,
          epfd,
          EPOLL_CTL_ADD as isize,
-         upstream_state.fd as isize,
+         tls_connection.fd as isize,
          &saved_event_in_only as *const epoll_event as isize
       );
    }
@@ -274,7 +269,7 @@ pub fn tls_worker(epfd: isize, itc_fd: isize, fd_client_udp_listener: isize, ups
             if likely(read_client > 0) {
                debug_assert!(read_client <= 512);
 
-               let is_connected: bool = match upstream_state.tls_conn.process_new_packets() {
+               let is_connected: bool = match tls_connection.tls_conn.process_new_packets() {
                   Ok(io_state) => !io_state.peer_has_closed(),
                   Err(err) => {
                      println!("TLS error: {:?}", err);
@@ -282,15 +277,15 @@ pub fn tls_worker(epfd: isize, itc_fd: isize, fd_client_udp_listener: isize, ups
                   }
                };
                if !is_connected {
-                  sys_call!(SYS_EPOLL_CTL as isize, epfd, EPOLL_CTL_DEL as isize, upstream_state.fd, 0);
-                  upstream_state = tls::connect_helper(upstream_server, 853, &tls_client_config);
+                  sys_call!(SYS_EPOLL_CTL as isize, epfd, EPOLL_CTL_DEL as isize, tls_connection.fd, 0);
+                  tls_connection = tls::connect_helper(upstream_server, 853, &tls_client_config);
 
-                  saved_event_in_only.data.fd = upstream_state.fd as i32;
+                  saved_event_in_only.data.fd = tls_connection.fd as i32;
                   sys_call!(
                      SYS_EPOLL_CTL as isize,
                      epfd,
                      EPOLL_CTL_ADD as isize,
-                     upstream_state.fd as isize,
+                     tls_connection.fd as isize,
                      &saved_event_in_only as *const epoll_event as isize
                   );
                }
@@ -307,43 +302,43 @@ pub fn tls_worker(epfd: isize, itc_fd: isize, fd_client_udp_listener: isize, ups
                let query_slice_with_len_added: &mut [u8] =
                   unsafe { core::slice::from_raw_parts_mut(buf_itc_in.as_mut_ptr(), read_client as usize + 2) };
 
-               match upstream_state.tls_conn.writer().write_all(query_slice_with_len_added) {
+               match tls_connection.tls_conn.writer().write_all(query_slice_with_len_added) {
                   Ok(_) => (),
                   Err(_) => continue,
                }
 
-               match upstream_state.tls_conn.write_tls(&mut upstream_state.sock) {
+               match tls_connection.tls_conn.write_tls(&mut tls_connection.sock) {
                   Ok(_) => {}
                   Err(_) => {
-                     sys_call!(SYS_EPOLL_CTL as isize, epfd, EPOLL_CTL_DEL as isize, upstream_state.fd, 0);
-                     upstream_state = tls::connect_helper(upstream_server, 853, &tls_client_config);
+                     sys_call!(SYS_EPOLL_CTL as isize, epfd, EPOLL_CTL_DEL as isize, tls_connection.fd, 0);
+                     tls_connection = tls::connect_helper(upstream_server, 853, &tls_client_config);
 
-                     saved_event_in_only.data.fd = upstream_state.fd as i32;
+                     saved_event_in_only.data.fd = tls_connection.fd as i32;
                      sys_call!(
                         SYS_EPOLL_CTL as isize,
                         epfd,
                         EPOLL_CTL_ADD as isize,
-                        upstream_state.fd as isize,
+                        tls_connection.fd as isize,
                         &saved_event_in_only as *const epoll_event as isize
                      );
 
-                     match upstream_state.tls_conn.writer().write_all(query_slice_with_len_added) {
+                     match tls_connection.tls_conn.writer().write_all(query_slice_with_len_added) {
                         Ok(_) => (), //println!("write_all {} bytes", query_slice_with_len_added.len()),
                         Err(error) => println!("write_all failed with error {}", error),
                      }
 
-                     match upstream_state.tls_conn.write_tls(&mut upstream_state.sock) {
+                     match tls_connection.tls_conn.write_tls(&mut tls_connection.sock) {
                         Ok(_) => {}
                         Err(error) => {
-                           sys_call!(SYS_EPOLL_CTL as isize, epfd, EPOLL_CTL_DEL as isize, upstream_state.fd, 0);
-                           upstream_state = tls::connect_helper(upstream_server, 853, &tls_client_config);
+                           sys_call!(SYS_EPOLL_CTL as isize, epfd, EPOLL_CTL_DEL as isize, tls_connection.fd, 0);
+                           tls_connection = tls::connect_helper(upstream_server, 853, &tls_client_config);
 
-                           saved_event_in_only.data.fd = upstream_state.fd as i32;
+                           saved_event_in_only.data.fd = tls_connection.fd as i32;
                            sys_call!(
                               SYS_EPOLL_CTL as isize,
                               epfd,
                               EPOLL_CTL_ADD as isize,
-                              upstream_state.fd as isize,
+                              tls_connection.fd as isize,
                               &saved_event_in_only as *const epoll_event as isize
                            );
                            println!(
@@ -355,22 +350,22 @@ pub fn tls_worker(epfd: isize, itc_fd: isize, fd_client_udp_listener: isize, ups
                   }
                }
             }
-         } else if cur_fd == upstream_state.fd && upstream_dns_conn_good_state == true {
-            match upstream_state.tls_conn.read_tls(&mut upstream_state.sock) {
+         } else if cur_fd == tls_connection.fd && upstream_dns_conn_good_state == true {
+            match tls_connection.tls_conn.read_tls(&mut tls_connection.sock) {
                Err(error) => {
                   if error.kind() == std::io::ErrorKind::WouldBlock {
                      continue;
                   }
 
-                  sys_call!(SYS_EPOLL_CTL as isize, epfd, EPOLL_CTL_DEL as isize, upstream_state.fd, 0);
-                  let _ = upstream_state.tls_conn.complete_io(&mut upstream_state.sock);
+                  sys_call!(SYS_EPOLL_CTL as isize, epfd, EPOLL_CTL_DEL as isize, tls_connection.fd, 0);
+                  let _ = tls_connection.tls_conn.complete_io(&mut tls_connection.sock);
                   upstream_dns_conn_good_state = false;
                   continue;
                }
 
                Ok(0) => {
-                  sys_call!(SYS_EPOLL_CTL as isize, epfd, EPOLL_CTL_DEL as isize, upstream_state.fd, 0);
-                  let _ = upstream_state.tls_conn.complete_io(&mut upstream_state.sock);
+                  sys_call!(SYS_EPOLL_CTL as isize, epfd, EPOLL_CTL_DEL as isize, tls_connection.fd, 0);
+                  let _ = tls_connection.tls_conn.complete_io(&mut tls_connection.sock);
                   upstream_dns_conn_good_state = false;
                   continue;
                }
@@ -378,10 +373,10 @@ pub fn tls_worker(epfd: isize, itc_fd: isize, fd_client_udp_listener: isize, ups
                Ok(_) => {}
             };
 
-            let io_state = match upstream_state.tls_conn.process_new_packets() {
+            let io_state = match tls_connection.tls_conn.process_new_packets() {
                Ok(io_state) => io_state,
                Err(err) => {
-                  sys_call!(SYS_EPOLL_CTL as isize, epfd, EPOLL_CTL_DEL as isize, upstream_state.fd, 0);
+                  sys_call!(SYS_EPOLL_CTL as isize, epfd, EPOLL_CTL_DEL as isize, tls_connection.fd, 0);
                   upstream_dns_conn_good_state = false;
                   println!("TLS error: {:?}", err);
                   continue;
@@ -392,7 +387,7 @@ pub fn tls_worker(epfd: isize, itc_fd: isize, fd_client_udp_listener: isize, ups
             if bytes_to_read > 0 {
                let mut response_buffer = Vec::with_capacity(bytes_to_read);
                unsafe { response_buffer.set_len(bytes_to_read) };
-               upstream_state.tls_conn.reader().read_exact(&mut response_buffer).unwrap();
+               tls_connection.tls_conn.reader().read_exact(&mut response_buffer).unwrap();
 
                // We loop here in case there are multiple responses back-to-back in our buffer
                loop {
@@ -444,8 +439,8 @@ pub fn tls_worker(epfd: isize, itc_fd: isize, fd_client_udp_listener: isize, ups
             }
 
             if io_state.peer_has_closed() {
-               sys_call!(SYS_EPOLL_CTL as isize, epfd, EPOLL_CTL_DEL as isize, upstream_state.fd, 0);
-               let _ = upstream_state.tls_conn.complete_io(&mut upstream_state.sock);
+               sys_call!(SYS_EPOLL_CTL as isize, epfd, EPOLL_CTL_DEL as isize, tls_connection.fd, 0);
+               let _ = tls_connection.tls_conn.complete_io(&mut tls_connection.sock);
                upstream_dns_conn_good_state = false;
             }
          }

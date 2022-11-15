@@ -87,7 +87,7 @@ pub fn u64toa(buf: &mut [i8], value: u64) -> i64 {
 // Convert u8 to ascii string representation to bytes.
 #[inline]
 pub fn u8toa(out_buf_start: *const u8, value: u8) -> usize {
-   let mut buf_walker = out_buf_start.as_mut();
+   let mut buf_walker = out_buf_start.cast_mut();
 
    let v: u32 = value as u32;
 

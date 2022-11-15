@@ -144,6 +144,7 @@ pub fn get_limits(resource: u32, limits: &mut rlimit) -> isize {
 pub fn set_limits(resource: u32, value: u32) -> isize {
    debug_assert!(resource <= 16);
 
+   #[allow(invalid_value)]
    let mut limits: rlimit = unsafe { core::mem::MaybeUninit::uninit().assume_init() };
 
    let ret = get_limits(resource, &mut limits);
