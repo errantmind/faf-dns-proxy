@@ -15,12 +15,15 @@ impl Stats {
       self.reconnect_count += 1;
    }
 
-   pub fn array_increment_fastest(stat_array: &mut [Self], dns_ip_key: &str) {
+   pub fn array_increment_fastest(stat_array: &mut [Self], dns_ip_key: &str) -> usize {
       for stats in stat_array {
          if stats.dns_ip == dns_ip_key {
             stats.increment_fastest();
+            return stats.fastest_count;
          }
       }
+
+      return 0;
    }
 
    pub fn array_increment_reconnect(stat_array: &mut [Self], dns_ip_key: &str) {

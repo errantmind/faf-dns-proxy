@@ -171,6 +171,21 @@ pub fn unshare_file_descriptors() {
    sys_call!(SYS_UNSHARE as isize, CLONE_FILES as isize);
 }
 
+/// Uses xxhash to hash a byte slice
+#[inline(always)]
+pub fn hash64(bytes: &[u8]) -> u64 {
+   use xxhash_rust::xxh3::xxh3_64;
+   xxh3_64(bytes)
+}
+
+#[inline(always)]
+pub fn hash32(bytes: &[u8]) -> u32 {
+   use xxhash_rust::xxh3::xxh3_64;
+   let long_hash = xxh3_64(bytes);
+   let bitwise_xor_fold = (long_hash >> 32) ^ (long_hash & (!0u64 >> 32));
+   bitwise_xor_fold as u32
+}
+
 /// Converts the internet host which is in network byte order, represented as a 32bit int
 /// to a str (in a byte buffer) in IPv4 dotted-decimal notation.
 ///

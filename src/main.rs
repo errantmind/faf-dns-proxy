@@ -17,22 +17,18 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
 #![allow(clippy::missing_safety_doc, clippy::uninit_assumed_init, dead_code)]
-#![feature(
-   const_size_of_val,
-   core_intrinsics,
-   const_mut_refs,
-   const_for,
-   inline_const
-)]
+#![feature(const_size_of_val, core_intrinsics, const_mut_refs, const_for, inline_const)]
 
 mod const_config;
 mod const_sys;
 mod dns;
 mod epoll;
-mod u64toa;
 mod net;
+mod query_cache;
 mod stats;
+mod time;
 mod tls;
+mod u64toa;
 mod util;
 
 pub fn main() {

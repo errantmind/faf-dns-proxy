@@ -20,11 +20,12 @@ use crate::const_config::*;
 use crate::const_sys::*;
 use crate::dns;
 use crate::net;
+use crate::query_cache;
 use crate::stats;
+use crate::time;
 use crate::tls;
 use crate::util;
 use crate::util::get_num_logical_cpus;
-
 use core::intrinsics::likely;
 use std::io::Read;
 use std::io::Write;
@@ -49,7 +50,10 @@ pub struct epoll_event {
 static mut STATS: [stats::Stats; UPSTREAM_DNS_SERVERS.len()] = stats::init_stats();
 
 lazy_static::lazy_static! {
-   static ref DNS_QUERY_CACHE: std::sync::Mutex<HashMap<&'static [u8], Vec<u8>>> =
+   static ref DNS_QUESTION_CACHE: std::sync::Mutex<HashMap<Vec<u8>, query_cache::QuestionCache>> =
+      std::sync::Mutex::new(HashMap::default());
+
+   static ref DNS_ANSWER_CACHE: std::sync::Mutex<HashMap<Vec<u8>, query_cache::AnswerCache>> =
       std::sync::Mutex::new(HashMap::default());
 
    // We route DNS responses by the id they provided in the initial request. This may occasionally cause
@@ -132,20 +136,18 @@ pub fn go(port: u16) {
    let client_addr: net::sockaddr_in = unsafe { core::mem::zeroed() };
    let client_socket_len = net::SOCKADDR_IN_LEN;
 
+   let mut cache_hits: u64 = 0;
+   let mut cache_hits_print_threshold = 16;
+
    loop {
-      let num_incoming_events = sys_call!(
-         SYS_EPOLL_WAIT as isize,
-         epfd,
-         epoll_events_start_address,
-         MAX_EPOLL_EVENTS_RETURNED as isize,
-         EPOLL_TIMEOUT_MILLIS
-      );
+      let num_incoming_events =
+         sys_call!(SYS_EPOLL_WAIT as isize, epfd, epoll_events_start_address, MAX_EPOLL_EVENTS_RETURNED as isize, EPOLL_TIMEOUT_MILLIS);
 
       for index in 0..num_incoming_events {
          let cur_fd = unsafe { (*epoll_events.get_unchecked(index as usize)).data.fd } as isize;
 
          if cur_fd == client_udp_socket.fd {
-            let read_client = sys_call!(
+            let num_bytes_read = sys_call!(
                SYS_RECVFROM as isize,
                client_udp_socket.fd,
                buf_client_request_start_address,
@@ -155,20 +157,24 @@ pub fn go(port: u16) {
                &client_socket_len as *const _ as _
             );
 
-            if likely(read_client > 0) {
-               debug_assert!(read_client <= 512);
+            if likely(num_bytes_read > 0) {
+               debug_assert!(num_bytes_read <= 512);
 
                // Extract just the id from the client request
-               let id = dns::get_id_big_endian(buf_client_request.as_ptr(), read_client as usize);
+               let id = dns::get_id_big_endian(buf_client_request.as_ptr(), num_bytes_read as usize);
+               let cache_key = dns::get_query_unique_id(buf_client_request.as_ptr(), num_bytes_read as usize);
+               //let debug_query = dns::get_question_as_string(buf_client_request.as_ptr(), num_bytes_read as usize);
+               //println!("cache_key_pre: {} {} -> {}", util::hash32(cache_key), debug_query, cache_key.len());
 
-               // Scope for cache guard
                {
-                  let unique_query_name = dns::get_query_unique_id(buf_client_request.as_ptr(), read_client as usize);
-                  let mut cache_guard = DNS_QUERY_CACHE.lock().unwrap();
-                  let cached_response_maybe = cache_guard.get_mut(unique_query_name);
+                  // Scope for cache guard.
+                  // First check the cache and respond immediately if we already have an answer to the query
+
+                  let mut cache_guard = DNS_ANSWER_CACHE.lock().unwrap();
+                  let cached_response_maybe = cache_guard.get_mut(cache_key);
 
                   if let Some(cached_response) = cached_response_maybe {
-                     let response_bytes_stripped_tcp_prefix = dns::remove_tcp_dns_size_prefix(cached_response);
+                     let response_bytes_stripped_tcp_prefix = dns::remove_tcp_dns_size_prefix(&mut cached_response.answer);
                      dns::set_id_big_endian(id, response_bytes_stripped_tcp_prefix);
 
                      let _wrote = sys_call!(
@@ -181,12 +187,23 @@ pub fn go(port: u16) {
                         net::SOCKADDR_IN_LEN as isize
                      );
 
+                     {
+                        // Temp: Track cache hits
+
+                        cache_hits += 1;
+                        if cache_hits >= cache_hits_print_threshold {
+                           println!("cache hits: {}", cache_hits_print_threshold);
+                           cache_hits_print_threshold <<= 1;
+                        }
+                     }
+
                      continue;
                   }
                }
 
-               // Save the client state
                {
+                  // Save the client state
+
                   let mut id_router_guard = BUF_ID_ROUTER.lock().unwrap();
                   let mut saved_addr = id_router_guard.get_mut(id as usize).unwrap();
                   saved_addr.sin_family = client_addr.sin_family;
@@ -194,15 +211,24 @@ pub fn go(port: u16) {
                   saved_addr.sin_addr.s_addr = client_addr.sin_addr.s_addr;
                }
 
-               // Write to ITC sockets for upstream DNS resolution
                {
+                  // Add to question cache
+
+                  let asked_timestamp = time::get_timespec();
+
+                  let mut cache_guard = DNS_QUESTION_CACHE.lock().unwrap();
+                  cache_guard.insert(cache_key.to_vec(), query_cache::QuestionCache { asked_timestamp });
+                  // for item in cache_guard.iter() {
+                  //    println!("inside_cache_pre: {}", util::hash32(item.0));
+                  // }
+               }
+
+               {
+                  // Write to ITC sockets for upstream DNS resolution
+
                   for unix_socket in itc_client_sockets.iter() {
-                     let _ = sys_call!(
-                        SYS_WRITE as isize,
-                        *unix_socket as isize,
-                        buf_client_request_start_address,
-                        read_client as isize
-                     );
+                     let _ =
+                        sys_call!(SYS_WRITE as isize, *unix_socket as isize, buf_client_request_start_address, num_bytes_read as isize);
                   }
                }
             }
@@ -250,13 +276,8 @@ pub fn tls_worker(epfd: isize, itc_fd: isize, fd_client_udp_listener: isize, ups
    let buf_itc_in_start_address = buf_itc_in.as_ptr() as isize;
 
    loop {
-      let num_incoming_events = sys_call!(
-         SYS_EPOLL_WAIT as isize,
-         epfd,
-         epoll_events_ptr,
-         MAX_EPOLL_EVENTS_RETURNED as isize,
-         EPOLL_TIMEOUT_MILLIS
-      );
+      let num_incoming_events =
+         sys_call!(SYS_EPOLL_WAIT as isize, epfd, epoll_events_ptr, MAX_EPOLL_EVENTS_RETURNED as isize, EPOLL_TIMEOUT_MILLIS);
 
       let mut upstream_dns_conn_good_state = true;
 
@@ -292,9 +313,7 @@ pub fn tls_worker(epfd: isize, itc_fd: isize, fd_client_udp_listener: isize, ups
 
                // Add length field for TCP transmission as per https://datatracker.ietf.org/doc/html/rfc1035#section-4.2.2
                // This means putting two bytes at the beginning of the UDP message we received above
-               unsafe {
-                  core::ptr::copy(buf_itc_in.as_ptr(), buf_itc_in.as_ptr().add(2) as *mut u8, read_client as usize)
-               };
+               unsafe { core::ptr::copy(buf_itc_in.as_ptr(), buf_itc_in.as_ptr().add(2) as *mut u8, read_client as usize) };
 
                // Write both bytes at once after converting to Big Endian
                unsafe { *(buf_itc_in.as_mut_ptr() as *mut u16) = net::htons(read_client as u16) };
@@ -341,10 +360,7 @@ pub fn tls_worker(epfd: isize, itc_fd: isize, fd_client_udp_listener: isize, ups
                               tls_connection.fd as isize,
                               &saved_event_in_only as *const epoll_event as isize
                            );
-                           println!(
-                              "write_tls failed with error on core {} | {} \n NOT RETRYING",
-                              CPU_CORE_CLIENT_LISTENER, error
-                           );
+                           println!("write_tls failed with error on core {} | {} \n NOT RETRYING", CPU_CORE_CLIENT_LISTENER, error);
                         }
                      }
                   }
@@ -388,6 +404,7 @@ pub fn tls_worker(epfd: isize, itc_fd: isize, fd_client_udp_listener: isize, ups
                let mut response_buffer = Vec::with_capacity(bytes_to_read);
                unsafe { response_buffer.set_len(bytes_to_read) };
                tls_connection.tls_conn.reader().read_exact(&mut response_buffer).unwrap();
+               debug_assert!(response_buffer.len() == bytes_to_read, "Response buffer was resized when it shouldn't have been");
 
                // We loop here in case there are multiple responses back-to-back in our buffer
                loop {
@@ -412,8 +429,18 @@ pub fn tls_worker(epfd: isize, itc_fd: isize, fd_client_udp_listener: isize, ups
 
                      {
                         let cache_key = dns::get_query_unique_id(response_stripped.as_ptr(), response_stripped.len());
-                        let mut cache_guard = DNS_QUERY_CACHE.lock().unwrap();
+
+                        let mut cache_guard = DNS_ANSWER_CACHE.lock().unwrap();
                         if !cache_guard.contains_key(cache_key) {
+                           let debug_query = dns::get_question_as_string(response_stripped.as_ptr(), response_stripped.len());
+                           // println!(
+                           //    "cache_key_post: {} {} {} -> {}",
+                           //    upstream_server.1,
+                           //    util::hash32(cache_key),
+                           //    debug_query,
+                           //    cache_key.len()
+                           // );
+
                            let _wrote = sys_call!(
                               SYS_SENDTO as isize,
                               fd_client_udp_listener as isize,
@@ -424,8 +451,19 @@ pub fn tls_worker(epfd: isize, itc_fd: isize, fd_client_udp_listener: isize, ups
                               net::SOCKADDR_IN_LEN as isize
                            );
 
-                           cache_guard.insert(cache_key, response_buffer);
-                           unsafe { stats::Stats::array_increment_fastest(&mut STATS, upstream_server.1) };
+                           let elapsed_ms = time::get_elapsed_ms(
+                              &time::get_timespec(),
+                              &DNS_QUESTION_CACHE.lock().unwrap().get(cache_key).unwrap().asked_timestamp,
+                           );
+                           cache_guard.insert(
+                              cache_key.to_vec(),
+                              query_cache::AnswerCache { answer: response_buffer, elapsed_ms: elapsed_ms, ttl: 0 },
+                           );
+
+                           unsafe {
+                              let fastest_count = stats::Stats::array_increment_fastest(&mut STATS, upstream_server.1);
+                              println!("{:>4}ms -> {} ({} [{}])", elapsed_ms, debug_query, upstream_server.1, fastest_count);
+                           }
                         }
                      }
                   }
@@ -446,13 +484,13 @@ pub fn tls_worker(epfd: isize, itc_fd: isize, fd_client_udp_listener: isize, ups
          }
       }
 
-      if num_incoming_events == 0 {
-         unsafe {
-            print!("{}[2J", 27 as char);
-            for stat in STATS.as_slice() {
-               println!("{}\n", stat);
-            }
-         }
-      }
+      // if num_incoming_events == 0 {
+      //    unsafe {
+      //       print!("{}[2J", 27 as char);
+      //       for stat in STATS.as_slice() {
+      //          println!("{}\n", stat);
+      //       }
+      //    }
+      // }
    }
 }

@@ -23,26 +23,79 @@ pub fn remove_tcp_dns_size_prefix(input: &mut [u8]) -> &mut [u8] {
    &mut input[2..]
 }
 
+/// Walks one question in the query (QNAME, QTYPE, QCLASS) and returns these bytes a slice of the buffer
 #[inline]
 pub fn get_query_unique_id<'a>(dns_buf_start: *const u8, len: usize) -> &'a [u8] {
-   debug_assert!(len >= 19);
+   // The shortest query is for the root zone '.'. So Header (12 byets) + QNAME (3 bytes) + QTYPE (2 bytes) + QCLASS (2 bytes)
+   const SHORTEST_POSSIBLE_QUESTION_BYTES: usize = 19;
+   debug_assert!(len >= SHORTEST_POSSIBLE_QUESTION_BYTES);
+
    unsafe {
-      debug_assert_eq!(*dns_buf_start.add(4), 0u8);
-      debug_assert_eq!(*dns_buf_start.add(5), 1u8);
+      // The number of questions is 2 bytes. We only support queries with a single question
+      debug_assert!(*dns_buf_start.add(4) == 0u8, "More than one question per query is non-standard and unsupported");
+      debug_assert!(*dns_buf_start.add(5) == 1u8, "More than one question per query is non-standard and unsupported");
 
-      let dns_buf_end = dns_buf_start.add(len);
+      //println!("{}", get_question_as_string(dns_buf_start, len));
 
-      let mut length = 0;
+      // Skip the header
       let mut dns_qname_qtype_qclass_walker = dns_buf_start.add(12);
-      while *dns_qname_qtype_qclass_walker != 0u8 && dns_qname_qtype_qclass_walker != dns_buf_end {
-         length += 1;
-         dns_qname_qtype_qclass_walker = dns_qname_qtype_qclass_walker.add(1);
+
+      const QNAME_TERMINATOR_QTYPE_QCLASS_LEN: usize = 5;
+      let mut num_question_bytes: usize = 0;
+      {
+         const QNAME_TERMINATOR: u8 = 0;
+         let dns_buf_end = dns_buf_start.add(len);
+         while *dns_qname_qtype_qclass_walker != QNAME_TERMINATOR && dns_qname_qtype_qclass_walker != dns_buf_end {
+            num_question_bytes += 1;
+            dns_qname_qtype_qclass_walker = dns_qname_qtype_qclass_walker.add(1);
+         }
+
+         debug_assert!((dns_buf_end as usize - dns_qname_qtype_qclass_walker as usize) >= QNAME_TERMINATOR_QTYPE_QCLASS_LEN);
       }
 
-      debug_assert!((dns_buf_end as usize - dns_qname_qtype_qclass_walker as usize) > 5);
-
-      core::slice::from_raw_parts_mut(dns_buf_start.add(12) as *mut u8, length as usize + 5)
+      core::slice::from_raw_parts(dns_buf_start.add(12), num_question_bytes + QNAME_TERMINATOR_QTYPE_QCLASS_LEN)
    }
+}
+
+#[inline]
+pub fn get_question_as_string(dns_buf_start: *const u8, len: usize) -> String {
+   let mut question_str = String::new();
+   unsafe {
+      // Skip the header
+      const QNAME_TERMINATOR: u8 = 0;
+      let mut dns_qname_qtype_qclass_walker = dns_buf_start.add(12);
+      let dns_buf_end = dns_buf_start.add(len);
+      while *dns_qname_qtype_qclass_walker != QNAME_TERMINATOR && dns_qname_qtype_qclass_walker != dns_buf_end {
+         let segment_len = *dns_qname_qtype_qclass_walker as usize;
+         if question_str.len() > 0 {
+            question_str.push_str(".");
+         }
+         question_str
+            .push_str(std::str::from_utf8(core::slice::from_raw_parts(dns_qname_qtype_qclass_walker.add(1), segment_len)).unwrap());
+         dns_qname_qtype_qclass_walker = dns_qname_qtype_qclass_walker.add(1 + segment_len);
+      }
+
+      // // Skip adding terminator
+      // dns_qname_qtype_qclass_walker = dns_qname_qtype_qclass_walker.add(1);
+
+      // let mut buf: [u8; 3] = core::mem::zeroed();
+      // let qtype_first_byte_len = crate::u64toa::u8toa(buf.as_mut_ptr(), *dns_qname_qtype_qclass_walker);
+      // question_str.push_str(std::str::from_utf8(core::slice::from_raw_parts(buf.as_mut_ptr(), qtype_first_byte_len)).unwrap());
+      // dns_qname_qtype_qclass_walker = dns_qname_qtype_qclass_walker.add(1);
+
+      // let qtype_second_byte_len = crate::u64toa::u8toa(buf.as_mut_ptr(), *dns_qname_qtype_qclass_walker);
+      // question_str.push_str(std::str::from_utf8(core::slice::from_raw_parts(buf.as_mut_ptr(), qtype_second_byte_len)).unwrap());
+      // dns_qname_qtype_qclass_walker = dns_qname_qtype_qclass_walker.add(1);
+
+      // let qclass_first_byte_len = crate::u64toa::u8toa(buf.as_mut_ptr(), *dns_qname_qtype_qclass_walker);
+      // question_str.push_str(std::str::from_utf8(core::slice::from_raw_parts(buf.as_mut_ptr(), qclass_first_byte_len)).unwrap());
+      // dns_qname_qtype_qclass_walker = dns_qname_qtype_qclass_walker.add(1);
+
+      // let qclass_second_byte_len = crate::u64toa::u8toa(buf.as_mut_ptr(), *dns_qname_qtype_qclass_walker);
+      // question_str.push_str(std::str::from_utf8(core::slice::from_raw_parts(buf.as_mut_ptr(), qclass_second_byte_len)).unwrap());
+   }
+
+   question_str
 }
 
 #[inline]

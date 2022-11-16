@@ -127,9 +127,7 @@ pub fn get_udp_server_socket(cpu_core: i32, host: u32, port: u16) -> UdpSocket {
 
    if res < 0 {
       panic!("SYS_BIND");
-   }
-
-   println!("udp listener fd = {}", fd);
+   }   
 
    UdpSocket { fd, addr }
 }
@@ -261,8 +259,6 @@ pub fn tcp_connect(host_ip: &str, port: u16) -> isize {
       if res < 0 {
          panic!("SYS_SETSOCKOPT SO_LINGER, {}", res);
       }
-
-      println!("connect fd = {}", fd);
 
       //let res = sys_call!(SYS_FCNTL as isize, fd as isize, F_SETFL, O_NONBLOCK);
 
