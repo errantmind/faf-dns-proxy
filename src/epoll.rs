@@ -1,5 +1,5 @@
 /*
-FaF is a cutting edge, high performance web server
+FaF is a cutting edge, high performance dns proxy
 Copyright (C) 2021  James Bates
 
 This program is free software: you can redistribute it and/or modify
@@ -16,11 +16,10 @@ You should have received a copy of the GNU Affero General Public License
 along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
-use crate::const_config::*;
 use crate::const_sys::*;
 use crate::dns;
 use crate::net;
-use crate::query_cache;
+use crate::statics::*;
 use crate::stats;
 use crate::time;
 use crate::tls;
@@ -47,13 +46,23 @@ pub struct epoll_event {
    pub data: epoll_data,
 }
 
+struct QuestionCache {
+   pub asked_timestamp: crate::time::timespec,
+}
+
+struct AnswerCache {
+   pub answer: Vec<u8>,
+   pub elapsed_ms: i64,
+   pub ttl: u64,
+}
+
 static mut STATS: [stats::Stats; UPSTREAM_DNS_SERVERS.len()] = stats::init_stats();
 
 lazy_static::lazy_static! {
-   static ref DNS_QUESTION_CACHE: std::sync::Mutex<HashMap<Vec<u8>, query_cache::QuestionCache>> =
+   static ref DNS_QUESTION_CACHE: std::sync::Mutex<HashMap<Vec<u8>, QuestionCache>> =
       std::sync::Mutex::new(HashMap::default());
 
-   static ref DNS_ANSWER_CACHE: std::sync::Mutex<HashMap<Vec<u8>, query_cache::AnswerCache>> =
+   static ref DNS_ANSWER_CACHE: std::sync::Mutex<HashMap<Vec<u8>, AnswerCache>> =
       std::sync::Mutex::new(HashMap::default());
 
    // We route DNS responses by the id they provided in the initial request. This may occasionally cause
@@ -99,7 +108,7 @@ pub fn go(port: u16) {
       let itc_fd = itc_server_sockets[i];
       let client_udp_socket_fd = client_udp_socket.fd;
       let thread_name = format!("faf{}", UPSTREAM_DNS_SERVERS[i].1);
-      let thread_builder = std::thread::Builder::new().name(thread_name).stack_size(1024 * 1024 * 1);
+      let thread_builder = std::thread::Builder::new().name(thread_name).stack_size(1024 * 1024);
       let _ = thread_builder.spawn(move || {
          // Unshare the file descriptor table between threads to keep the fd number itself low, otherwise all
          // threads will share the same file descriptor table
@@ -119,7 +128,7 @@ pub fn go(port: u16) {
          SYS_EPOLL_CTL as isize,
          epfd,
          EPOLL_CTL_ADD as isize,
-         client_udp_socket.fd as isize,
+         client_udp_socket.fd,
          &epoll_event_listener as *const epoll_event as isize
       );
    }
@@ -144,7 +153,7 @@ pub fn go(port: u16) {
          sys_call!(SYS_EPOLL_WAIT as isize, epfd, epoll_events_start_address, MAX_EPOLL_EVENTS_RETURNED as isize, EPOLL_TIMEOUT_MILLIS);
 
       for index in 0..num_incoming_events {
-         let cur_fd = unsafe { (*epoll_events.get_unchecked(index as usize)).data.fd } as isize;
+         let cur_fd = unsafe { (epoll_events.get_unchecked(index as usize)).data.fd } as isize;
 
          if cur_fd == client_udp_socket.fd {
             let num_bytes_read = sys_call!(
@@ -167,6 +176,22 @@ pub fn go(port: u16) {
                //println!("cache_key_pre: {} {} -> {}", util::hash32(cache_key), debug_query, cache_key.len());
 
                {
+                  // Add to question cache
+
+                  let asked_timestamp = time::get_timespec();
+
+                  let mut cache_guard = DNS_QUESTION_CACHE.lock().unwrap();
+                  let cache_key_vec = cache_key.to_vec();
+                  if !cache_guard.contains_key(&cache_key_vec) {
+                     cache_guard.insert(cache_key.to_vec(), QuestionCache { asked_timestamp });
+                  }
+
+                  // for item in cache_guard.iter() {
+                  //    println!("inside_cache_pre: {}", util::hash32(item.0));
+                  // }
+               }
+
+               {
                   // Scope for cache guard.
                   // First check the cache and respond immediately if we already have an answer to the query
 
@@ -177,15 +202,19 @@ pub fn go(port: u16) {
                      let response_bytes_stripped_tcp_prefix = dns::remove_tcp_dns_size_prefix(&mut cached_response.answer);
                      dns::set_id_big_endian(id, response_bytes_stripped_tcp_prefix);
 
-                     let _wrote = sys_call!(
+                     let wrote = sys_call!(
                         SYS_SENDTO as isize,
-                        client_udp_socket.fd as isize,
+                        client_udp_socket.fd,
                         response_bytes_stripped_tcp_prefix.as_ptr() as isize,
                         response_bytes_stripped_tcp_prefix.len() as isize,
                         0,
                         &client_addr as *const _ as isize,
                         net::SOCKADDR_IN_LEN as isize
                      );
+
+                     if wrote <= 0 {
+                        panic!("Wrote nothing to client after fetching data from cache")
+                     }
 
                      {
                         // Temp: Track cache hits
@@ -209,18 +238,6 @@ pub fn go(port: u16) {
                   saved_addr.sin_family = client_addr.sin_family;
                   saved_addr.sin_port = client_addr.sin_port;
                   saved_addr.sin_addr.s_addr = client_addr.sin_addr.s_addr;
-               }
-
-               {
-                  // Add to question cache
-
-                  let asked_timestamp = time::get_timespec();
-
-                  let mut cache_guard = DNS_QUESTION_CACHE.lock().unwrap();
-                  cache_guard.insert(cache_key.to_vec(), query_cache::QuestionCache { asked_timestamp });
-                  // for item in cache_guard.iter() {
-                  //    println!("inside_cache_pre: {}", util::hash32(item.0));
-                  // }
                }
 
                {
@@ -251,7 +268,7 @@ pub fn tls_worker(epfd: isize, itc_fd: isize, fd_client_udp_listener: isize, ups
          SYS_EPOLL_CTL as isize,
          epfd,
          EPOLL_CTL_ADD as isize,
-         itc_fd as isize,
+         itc_fd,
          &saved_event_in_only as *const epoll_event as isize
       );
    }
@@ -267,7 +284,7 @@ pub fn tls_worker(epfd: isize, itc_fd: isize, fd_client_udp_listener: isize, ups
          SYS_EPOLL_CTL as isize,
          epfd,
          EPOLL_CTL_ADD as isize,
-         tls_connection.fd as isize,
+         tls_connection.fd,
          &saved_event_in_only as *const epoll_event as isize
       );
    }
@@ -282,7 +299,7 @@ pub fn tls_worker(epfd: isize, itc_fd: isize, fd_client_udp_listener: isize, ups
       let mut upstream_dns_conn_good_state = true;
 
       for index in 0..num_incoming_events {
-         let cur_fd = unsafe { (*epoll_events.get_unchecked(index as usize)).data.fd } as isize;
+         let cur_fd = unsafe { (epoll_events.get_unchecked(index as usize)).data.fd } as isize;
 
          if cur_fd == itc_fd {
             let read_client = sys_call!(SYS_READ as isize, itc_fd, buf_itc_in_start_address, REQ_BUFF_SIZE as isize);
@@ -306,7 +323,7 @@ pub fn tls_worker(epfd: isize, itc_fd: isize, fd_client_udp_listener: isize, ups
                      SYS_EPOLL_CTL as isize,
                      epfd,
                      EPOLL_CTL_ADD as isize,
-                     tls_connection.fd as isize,
+                     tls_connection.fd,
                      &saved_event_in_only as *const epoll_event as isize
                   );
                }
@@ -323,7 +340,9 @@ pub fn tls_worker(epfd: isize, itc_fd: isize, fd_client_udp_listener: isize, ups
 
                match tls_connection.tls_conn.writer().write_all(query_slice_with_len_added) {
                   Ok(_) => (),
-                  Err(_) => continue,
+                  Err(e) => {
+                     panic!("{e}");
+                  }
                }
 
                match tls_connection.tls_conn.write_tls(&mut tls_connection.sock) {
@@ -343,7 +362,7 @@ pub fn tls_worker(epfd: isize, itc_fd: isize, fd_client_udp_listener: isize, ups
 
                      match tls_connection.tls_conn.writer().write_all(query_slice_with_len_added) {
                         Ok(_) => (), //println!("write_all {} bytes", query_slice_with_len_added.len()),
-                        Err(error) => println!("write_all failed with error {}", error),
+                        Err(error) => panic!("write_all failed with error {}", error),
                      }
 
                      match tls_connection.tls_conn.write_tls(&mut tls_connection.sock) {
@@ -360,7 +379,7 @@ pub fn tls_worker(epfd: isize, itc_fd: isize, fd_client_udp_listener: isize, ups
                               tls_connection.fd as isize,
                               &saved_event_in_only as *const epoll_event as isize
                            );
-                           println!("write_tls failed with error on core {} | {} \n NOT RETRYING", CPU_CORE_CLIENT_LISTENER, error);
+                           panic!("write_tls failed with error on core {} | {} \n NOT RETRYING", CPU_CORE_CLIENT_LISTENER, error);
                         }
                      }
                   }
@@ -441,7 +460,7 @@ pub fn tls_worker(epfd: isize, itc_fd: isize, fd_client_udp_listener: isize, ups
                            //    cache_key.len()
                            // );
 
-                           let _wrote = sys_call!(
+                           let wrote = sys_call!(
                               SYS_SENDTO as isize,
                               fd_client_udp_listener as isize,
                               response_stripped.as_ptr() as isize,
@@ -451,18 +470,21 @@ pub fn tls_worker(epfd: isize, itc_fd: isize, fd_client_udp_listener: isize, ups
                               net::SOCKADDR_IN_LEN as isize
                            );
 
+                           if wrote <= 0 {
+                              panic!("Wrote nothing to client after receiving data from upstream")
+                           }
+
                            let elapsed_ms = time::get_elapsed_ms(
                               &time::get_timespec(),
                               &DNS_QUESTION_CACHE.lock().unwrap().get(cache_key).unwrap().asked_timestamp,
                            );
-                           cache_guard.insert(
-                              cache_key.to_vec(),
-                              query_cache::AnswerCache { answer: response_buffer, elapsed_ms: elapsed_ms, ttl: 0 },
-                           );
+                           cache_guard.insert(cache_key.to_vec(), AnswerCache { answer: response_buffer, elapsed_ms: elapsed_ms, ttl: 0 });
 
                            unsafe {
-                              let fastest_count = stats::Stats::array_increment_fastest(&mut STATS, upstream_server.1);
-                              println!("{:>4}ms -> {} ({} [{}])", elapsed_ms, debug_query, upstream_server.1, fastest_count);
+                              if !crate::statics::ARGS.daemon {
+                                 let fastest_count = stats::Stats::array_increment_fastest(&mut STATS, upstream_server.1);
+                                 println!("{:>4}ms -> {} ({} [{}])", elapsed_ms, debug_query, upstream_server.1, fastest_count);
+                              }
                            }
                         }
                      }
@@ -483,14 +505,5 @@ pub fn tls_worker(epfd: isize, itc_fd: isize, fd_client_udp_listener: isize, ups
             }
          }
       }
-
-      // if num_incoming_events == 0 {
-      //    unsafe {
-      //       print!("{}[2J", 27 as char);
-      //       for stat in STATS.as_slice() {
-      //          println!("{}\n", stat);
-      //       }
-      //    }
-      // }
    }
 }

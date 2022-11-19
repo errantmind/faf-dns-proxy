@@ -1,5 +1,5 @@
 /*
-FaF is a cutting edge, high performance web server
+FaF is a cutting edge, high performance dns proxy
 Copyright (C) 2021  James Bates
 
 This program is free software: you can redistribute it and/or modify
@@ -16,8 +16,15 @@ You should have received a copy of the GNU Affero General Public License
 along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
+pub const PROJECT_NAME: &str = env!("CARGO_PKG_NAME");
+pub const PROJECT_DIR: &str = env!("CARGO_MANIFEST_DIR");
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
-// faf spawns one thread per core, meaning each thread can handle 1024 connections. 
+pub static mut ARGS: crate::args::Args = unsafe { core::mem::MaybeUninit::zeroed().assume_init() };
+
+pub static SELF_CHECKSUM: once_cell::sync::Lazy<Option<u32>> = once_cell::sync::Lazy::new(|| Some(crate::util::self_checksum().unwrap().0));
+
+// faf spawns one thread per core, meaning each thread can handle 1024 connections.
 // If we don't UNSHARE, then we can only handle 'n' total connections across all threads (instead of 'each')
 pub const MAX_CONN: usize = 64;
 
@@ -37,9 +44,10 @@ pub const MAX_EPOLL_EVENTS_RETURNED: usize = 340;
 pub const CPU_CORE_CLIENT_LISTENER: usize = 0;
 
 pub struct UpstreamDnsServer(pub &'static str, pub &'static str);
-pub const UPSTREAM_DNS_SERVERS: [UpstreamDnsServer; 4] = [
+pub const UPSTREAM_DNS_SERVERS: [UpstreamDnsServer; 5] = [
    UpstreamDnsServer("one.one.one.one", "1.1.1.1"),
    UpstreamDnsServer("one.one.one.one", "1.0.0.1"),
    UpstreamDnsServer("dns.google", "8.8.8.8"),
    UpstreamDnsServer("dns.google", "8.8.4.4"),
+   UpstreamDnsServer("dns.quad9.net", "9.9.9.9"),
 ];

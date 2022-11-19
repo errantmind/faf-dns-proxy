@@ -1,5 +1,5 @@
 /*
-FaF is a cutting edge, high performance web server
+FaF is a cutting edge, high performance dns proxy
 Copyright (C) 2021  James Bates
 
 This program is free software: you can redistribute it and/or modify

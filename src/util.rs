@@ -1,5 +1,5 @@
 /*
-FaF is a cutting edge, high performance web server
+FaF is a cutting edge, high performance dns proxy
 Copyright (C) 2021  James Bates
 
 This program is free software: you can redistribute it and/or modify
@@ -15,6 +15,7 @@ GNU Affero General Public License for more details.
 You should have received a copy of the GNU Affero General Public License
 along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
+
 use crate::const_sys::*;
 use crate::u64toa;
 use faf_syscall::sys_call;
@@ -112,8 +113,7 @@ where
    #[derive(Copy, Clone)]
    struct Both<A, B>(A, B);
 
-   let arr: Both<First, Second> =
-      Both(*transmute::<_, *const First>(a.as_ptr()), *transmute::<_, *const Second>(b.as_ptr()));
+   let arr: Both<First, Second> = Both(*transmute::<_, *const First>(a.as_ptr()), *transmute::<_, *const Second>(b.as_ptr()));
 
    transmute(arr)
 }
@@ -186,6 +186,19 @@ pub fn hash32(bytes: &[u8]) -> u32 {
    bitwise_xor_fold as u32
 }
 
+// Returns the checksum and the file size
+#[inline(always)]
+pub fn self_checksum() -> Option<(u32, u32)> {
+   use std::io::Read;
+
+   let current_exe = std::env::current_exe().unwrap();
+   let mut f = std::fs::File::open(current_exe).ok()?;
+   let file_len = f.metadata().ok()?.len();
+   let mut bytes = Vec::with_capacity(file_len as usize + 1);
+   f.read_to_end(&mut bytes).ok()?;
+   Some((hash32(&bytes), bytes.len() as u32))
+}
+
 /// Converts the internet host which is in network byte order, represented as a 32bit int
 /// to a str (in a byte buffer) in IPv4 dotted-decimal notation.
 ///
@@ -225,20 +238,17 @@ pub unsafe fn inet4_ntoa(s_addr: u32, out_buff_start: *mut u8) -> usize {
    *output_byte_walker = DOT;
    output_byte_walker = output_byte_walker.add(1);
 
-   output_byte_walker =
-      output_byte_walker.add(u64toa::u8toa(output_byte_walker, *(s_addr_start_ptr.add(1))));
+   output_byte_walker = output_byte_walker.add(u64toa::u8toa(output_byte_walker, *(s_addr_start_ptr.add(1))));
 
    *output_byte_walker = DOT;
    output_byte_walker = output_byte_walker.add(1);
 
-   output_byte_walker =
-      output_byte_walker.add(u64toa::u8toa(output_byte_walker, *(s_addr_start_ptr.add(2))));
+   output_byte_walker = output_byte_walker.add(u64toa::u8toa(output_byte_walker, *(s_addr_start_ptr.add(2))));
 
    *output_byte_walker = DOT;
    output_byte_walker = output_byte_walker.add(1);
 
-   output_byte_walker =
-      output_byte_walker.add(u64toa::u8toa(output_byte_walker, *(s_addr_start_ptr.add(3))));
+   output_byte_walker = output_byte_walker.add(u64toa::u8toa(output_byte_walker, *(s_addr_start_ptr.add(3))));
 
    output_byte_walker as usize - out_buff_start as usize
 }

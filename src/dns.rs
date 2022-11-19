@@ -1,3 +1,21 @@
+/*
+FaF is a cutting edge, high performance dns proxy
+Copyright (C) 2021  James Bates
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License
+along with this program.  If not, see <https://www.gnu.org/licenses/>.
+*/
+
 #[inline]
 pub fn get_id_big_endian(dns_buf_start: *const u8, len: usize) -> u16 {
    debug_assert!(len >= 2);

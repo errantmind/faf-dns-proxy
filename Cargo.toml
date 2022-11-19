@@ -1,18 +1,46 @@
 [package]
 name = "faf-dns-proxy"
-version = "0.1.0"
+version = "0.2.5"
 authors = ["James Bates <errantmind@protonmail.com>"]
 edition = "2021"
+
+[profile.dev]
+opt-level = 0
+debug = true
+debug-assertions = true
+overflow-checks = true
+lto = false
+panic = 'unwind'
+incremental = true
+codegen-units = 256
+rpath = false
+
+[profile.release]
+opt-level = 3
+panic = 'abort'
+codegen-units = 1
+lto = "thin"
+debug = false
+incremental = false
+overflow-checks = false
+strip = 'symbols'
 
 [features]
 default = []
 
 [dependencies]
+# FFI bindings to better allocator designed by Microsoft
+mimalloc = { version = "*", default-features = false }
+
+# command line parser
+clap = { version = "3.1.18", default-features = true, features = ["derive"] }
+
 faf-syscall = "*"
 #dnsparse = "*"
 lazy_static = "*"
+once_cell = "*"
 dns-parser = "*"
 rustls = "*"
 webpki-roots = "*"
-hashbrown = "*"
+hashbrown = { version = "*", default-features = true, features = ["inline-more", "ahash"] }
 xxhash-rust = { version = "*", default-features = false, features = ["xxh3"] }

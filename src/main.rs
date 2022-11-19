@@ -1,5 +1,5 @@
 /*
-FaF is a cutting edge, high performance web server
+FaF is a cutting edge, high performance dns proxy
 Copyright (C) 2021  James Bates
 
 This program is free software: you can redistribute it and/or modify
@@ -17,20 +17,60 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
 #![allow(clippy::missing_safety_doc, clippy::uninit_assumed_init, dead_code)]
-#![feature(const_size_of_val, core_intrinsics, const_mut_refs, const_for, inline_const)]
+#![feature(const_size_of_val, const_maybe_uninit_zeroed, core_intrinsics, const_mut_refs, const_for, inline_const)]
 
-mod const_config;
+mod args;
 mod const_sys;
 mod dns;
 mod epoll;
 mod net;
-mod query_cache;
+mod statics;
 mod stats;
 mod time;
 mod tls;
 mod u64toa;
 mod util;
 
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 pub fn main() {
+   let args = {
+      // Init args
+
+      use clap::Parser;
+      unsafe { statics::ARGS = args::Args::parse() };
+      args::Args::parse()
+   };
+
+   if !args.daemon {
+      print_banner();
+      print_version();
+   }
+
    epoll::go(53);
+}
+
+fn print_banner() {
+   println!("");
+   println!(
+      r"
+    ███████╗ █████╗ ███████╗    ██████╗ ███╗   ██╗███████╗
+    ██╔════╝██╔══██╗██╔════╝    ██╔══██╗████╗  ██║██╔════╝
+    █████╗  ███████║█████╗      ██║  ██║██╔██╗ ██║███████╗
+    ██╔══╝  ██╔══██║██╔══╝      ██║  ██║██║╚██╗██║╚════██║
+    ██║     ██║  ██║██║         ██████╔╝██║ ╚████║███████║
+    ╚═╝     ╚═╝  ╚═╝╚═╝         ╚═════╝ ╚═╝  ╚═══╝╚══════╝
+    "
+   );
+   println!("\n");
+}
+
+fn print_version() {
+   println!(
+      "{} v{} | checksum: {} | author: errantmind@protonmail.com\n",
+      statics::PROJECT_NAME,
+      statics::VERSION,
+      statics::SELF_CHECKSUM.unwrap()
+   );
 }

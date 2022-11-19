@@ -1,5 +1,5 @@
 /*
-FaF is a cutting edge, high performance web server
+FaF is a cutting edge, high performance dns proxy
 Copyright (C) 2021  James Bates
 
 This program is free software: you can redistribute it and/or modify
@@ -16,10 +16,10 @@ You should have received a copy of the GNU Affero General Public License
 along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
-use crate::const_config::*;
 use crate::const_sys::*;
-use faf_syscall::sys_call;
+use crate::statics::*;
 use crate::util;
+use faf_syscall::sys_call;
 
 #[inline(always)]
 pub fn htons(u: u16) -> u16 {
@@ -48,12 +48,7 @@ impl sockaddr_in {
    // Assumes bytes for port and s_addr are in network byte order already
    #[inline]
    pub fn new(sin_family: u16, sin_port: u16, s_addr: u32) -> Self {
-      Self {
-         sin_family,
-         sin_port,
-         sin_addr: in_addr { s_addr },
-         sin_zero: unsafe { core::mem::MaybeUninit::zeroed().assume_init() },
-      }
+      Self { sin_family, sin_port, sin_addr: in_addr { s_addr }, sin_zero: unsafe { core::mem::MaybeUninit::zeroed().assume_init() } }
    }
 }
 
@@ -84,14 +79,8 @@ pub fn get_udp_server_socket(cpu_core: i32, host: u32, port: u16) -> UdpSocket {
 
    let size_of_optval = core::mem::size_of_val(&OPTVAL) as u32;
 
-   let res = sys_call!(
-      SYS_SETSOCKOPT as isize,
-      fd,
-      SOL_SOCKET as isize,
-      SO_REUSEADDR as isize,
-      &OPTVAL as *const _ as _,
-      size_of_optval as isize
-   );
+   let res =
+      sys_call!(SYS_SETSOCKOPT as isize, fd, SOL_SOCKET as isize, SO_REUSEADDR as isize, &OPTVAL as *const _ as _, size_of_optval as isize);
 
    if res < 0 {
       panic!("SYS_SETSOCKOPT SO_REUSEADDR");
@@ -127,7 +116,7 @@ pub fn get_udp_server_socket(cpu_core: i32, host: u32, port: u16) -> UdpSocket {
 
    if res < 0 {
       panic!("SYS_BIND");
-   }   
+   }
 
    UdpSocket { fd, addr }
 }
@@ -156,31 +145,31 @@ pub fn tcp_connect(host_ip: &str, port: u16) -> isize {
       let fd = sys_call!(SYS_SOCKET as isize, AF_INET as isize, SOCK_STREAM as isize, 0);
       debug_assert!(fd >= 0);
 
-      // let res = sys_call!(
-      //    SYS_SETSOCKOPT as isize,
-      //    fd,
-      //    SOL_SOCKET as isize,
-      //    SO_KEEPALIVE as isize,
-      //    &SO_KEEPALIVE_VAL as *const isize as _,
-      //    core::mem::size_of_val(&SO_KEEPALIVE_VAL) as isize as isize
-      // );
+      let res = sys_call!(
+         SYS_SETSOCKOPT as isize,
+         fd,
+         SOL_SOCKET as isize,
+         SO_KEEPALIVE as isize,
+         &SO_KEEPALIVE_VAL as *const isize as _,
+         core::mem::size_of_val(&SO_KEEPALIVE_VAL) as isize as isize
+      );
 
-      // if res < 0 {
-      //    panic!("SYS_SETSOCKOPT SO_REUSEPORT, {}", res);
-      // }
+      if res < 0 {
+         panic!("SYS_SETSOCKOPT SO_KEEPALIVE, {}", res);
+      }
 
-      // let res = sys_call!(
-      //    SYS_SETSOCKOPT as isize,
-      //    fd,
-      //    IPPROTO_TCP as isize,
-      //    TCP_KEEPIDLE as isize,
-      //    &TCP_KEEPIDLE_VAL as *const _ as _,
-      //    core::mem::size_of_val(&TCP_KEEPIDLE_VAL) as isize
-      // );
+      let res = sys_call!(
+         SYS_SETSOCKOPT as isize,
+         fd,
+         IPPROTO_TCP as isize,
+         TCP_KEEPIDLE as isize,
+         &TCP_KEEPIDLE_VAL as *const _ as _,
+         core::mem::size_of_val(&TCP_KEEPIDLE_VAL) as isize
+      );
 
-      // if res < 0 {
-      //    panic!("SYS_SETSOCKOPT TCP_KEEPIDLE, {}", res);
-      // }
+      if res < 0 {
+         panic!("SYS_SETSOCKOPT TCP_KEEPIDLE, {}", res);
+      }
 
       // let res = sys_call!(
       //    SYS_SETSOCKOPT as isize,
@@ -195,31 +184,31 @@ pub fn tcp_connect(host_ip: &str, port: u16) -> isize {
       //    panic!("SYS_SETSOCKOPT TCP_KEEPCNT, {}", res);
       // }
 
-      // let res = sys_call!(
-      //    SYS_SETSOCKOPT as isize,
-      //    fd,
-      //    IPPROTO_TCP as isize,
-      //    TCP_KEEPINTVL as isize,
-      //    &TCP_KEEPINTVL_VAL as *const _ as _,
-      //    core::mem::size_of_val(&TCP_KEEPINTVL_VAL) as isize
-      // );
+      let res = sys_call!(
+         SYS_SETSOCKOPT as isize,
+         fd,
+         IPPROTO_TCP as isize,
+         TCP_KEEPINTVL as isize,
+         &TCP_KEEPINTVL_VAL as *const _ as _,
+         core::mem::size_of_val(&TCP_KEEPINTVL_VAL) as isize
+      );
 
-      // if res < 0 {
-      //    panic!("SYS_SETSOCKOPT TCP_KEEPINTVL, {}", res);
-      // }
+      if res < 0 {
+         panic!("SYS_SETSOCKOPT TCP_KEEPINTVL, {}", res);
+      }
 
-      // let res = sys_call!(
-      //    SYS_SETSOCKOPT as isize,
-      //    fd,
-      //    IPPROTO_TCP as isize,
-      //    TCP_FASTOPEN as isize,
-      //    &MAX_CONN as *const _ as _,
-      //    core::mem::size_of_val(&MAX_CONN) as isize
-      // );
+      let res = sys_call!(
+         SYS_SETSOCKOPT as isize,
+         fd,
+         IPPROTO_TCP as isize,
+         TCP_FASTOPEN as isize,
+         &MAX_CONN as *const _ as _,
+         core::mem::size_of_val(&MAX_CONN) as isize
+      );
 
-      // if res < 0 {
-      //    panic!("SYS_SETSOCKOPT TCP_FASTOPEN, {}", res);
-      // }
+      if res < 0 {
+         panic!("SYS_SETSOCKOPT TCP_FASTOPEN, {}", res);
+      }
 
       let res = sys_call!(
          SYS_SETSOCKOPT as isize,
@@ -260,7 +249,7 @@ pub fn tcp_connect(host_ip: &str, port: u16) -> isize {
          panic!("SYS_SETSOCKOPT SO_LINGER, {}", res);
       }
 
-      //let res = sys_call!(SYS_FCNTL as isize, fd as isize, F_SETFL, O_NONBLOCK);
+      // let res = sys_call!(SYS_FCNTL as isize, fd as isize, F_SETFL, O_NONBLOCK);
 
       // if res < 0 {
       //    panic!("SYS_FCNTL O_NONBLOCK, {}", res);
