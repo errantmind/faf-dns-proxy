@@ -151,7 +151,7 @@ pub fn tcp_connect(host_ip: &str, port: u16) -> isize {
          SOL_SOCKET as isize,
          SO_KEEPALIVE as isize,
          &SO_KEEPALIVE_VAL as *const isize as _,
-         core::mem::size_of_val(&SO_KEEPALIVE_VAL) as isize as isize
+         core::mem::size_of_val(&SO_KEEPALIVE_VAL) as isize
       );
 
       if res < 0 {

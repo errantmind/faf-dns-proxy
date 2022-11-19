@@ -46,5 +46,5 @@ pub fn get_timespec() -> timespec {
 }
 
 pub fn get_elapsed_ms(later: &timespec, earlier: &timespec) -> i64 {
-   return (later.tv_sec - earlier.tv_sec) * 1_000 + (later.tv_nsec - earlier.tv_nsec) / 1_000_000;
+   (later.tv_sec - earlier.tv_sec) * 1_000 + (later.tv_nsec - earlier.tv_nsec) / 1_000_000
 }

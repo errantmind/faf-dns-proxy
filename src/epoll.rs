@@ -245,7 +245,7 @@ pub fn go(port: u16) {
 
                   for unix_socket in itc_client_sockets.iter() {
                      let _ =
-                        sys_call!(SYS_WRITE as isize, *unix_socket as isize, buf_client_request_start_address, num_bytes_read as isize);
+                        sys_call!(SYS_WRITE as isize, *unix_socket as isize, buf_client_request_start_address, num_bytes_read);
                   }
                }
             }
@@ -356,7 +356,7 @@ pub fn tls_worker(epfd: isize, itc_fd: isize, fd_client_udp_listener: isize, ups
                         SYS_EPOLL_CTL as isize,
                         epfd,
                         EPOLL_CTL_ADD as isize,
-                        tls_connection.fd as isize,
+                        tls_connection.fd,
                         &saved_event_in_only as *const epoll_event as isize
                      );
 
@@ -376,7 +376,7 @@ pub fn tls_worker(epfd: isize, itc_fd: isize, fd_client_udp_listener: isize, ups
                               SYS_EPOLL_CTL as isize,
                               epfd,
                               EPOLL_CTL_ADD as isize,
-                              tls_connection.fd as isize,
+                              tls_connection.fd,
                               &saved_event_in_only as *const epoll_event as isize
                            );
                            panic!("write_tls failed with error on core {} | {} \n NOT RETRYING", CPU_CORE_CLIENT_LISTENER, error);
@@ -385,7 +385,7 @@ pub fn tls_worker(epfd: isize, itc_fd: isize, fd_client_udp_listener: isize, ups
                   }
                }
             }
-         } else if cur_fd == tls_connection.fd && upstream_dns_conn_good_state == true {
+         } else if cur_fd == tls_connection.fd && upstream_dns_conn_good_state {
             match tls_connection.tls_conn.read_tls(&mut tls_connection.sock) {
                Err(error) => {
                   if error.kind() == std::io::ErrorKind::WouldBlock {
@@ -462,7 +462,7 @@ pub fn tls_worker(epfd: isize, itc_fd: isize, fd_client_udp_listener: isize, ups
 
                            let wrote = sys_call!(
                               SYS_SENDTO as isize,
-                              fd_client_udp_listener as isize,
+                              fd_client_udp_listener,
                               response_stripped.as_ptr() as isize,
                               response_stripped.len() as isize,
                               0,
@@ -478,7 +478,7 @@ pub fn tls_worker(epfd: isize, itc_fd: isize, fd_client_udp_listener: isize, ups
                               &time::get_timespec(),
                               &DNS_QUESTION_CACHE.lock().unwrap().get(cache_key).unwrap().asked_timestamp,
                            );
-                           cache_guard.insert(cache_key.to_vec(), AnswerCache { answer: response_buffer, elapsed_ms: elapsed_ms, ttl: 0 });
+                           cache_guard.insert(cache_key.to_vec(), AnswerCache { answer: response_buffer, elapsed_ms, ttl: 0 });
 
                            unsafe {
                               if !crate::statics::ARGS.daemon {

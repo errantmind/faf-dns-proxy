@@ -52,7 +52,7 @@ pub fn main() {
 }
 
 fn print_banner() {
-   println!("");
+   println!();
    println!(
       r"
     ███████╗ █████╗ ███████╗    ██████╗ ███╗   ██╗███████╗

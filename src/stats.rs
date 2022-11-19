@@ -41,7 +41,7 @@ impl Stats {
          }
       }
 
-      return 0;
+      0
    }
 
    pub fn array_increment_reconnect(stat_array: &mut [Self], dns_ip_key: &str) {
