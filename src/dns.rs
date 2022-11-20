@@ -93,24 +93,28 @@ pub fn get_question_as_string(dns_buf_start: *const u8, len: usize) -> String {
          dns_qname_qtype_qclass_walker = dns_qname_qtype_qclass_walker.add(1 + segment_len);
       }
 
-      // // Skip adding terminator
-      // dns_qname_qtype_qclass_walker = dns_qname_qtype_qclass_walker.add(1);
+      {
+         // Include the entire query (.. + QTYPE + QCLASS)
 
-      // let mut buf: [u8; 3] = core::mem::zeroed();
-      // let qtype_first_byte_len = crate::u64toa::u8toa(buf.as_mut_ptr(), *dns_qname_qtype_qclass_walker);
-      // question_str.push_str(std::str::from_utf8(core::slice::from_raw_parts(buf.as_mut_ptr(), qtype_first_byte_len)).unwrap());
-      // dns_qname_qtype_qclass_walker = dns_qname_qtype_qclass_walker.add(1);
+         // // Skip adding terminator
+         // dns_qname_qtype_qclass_walker = dns_qname_qtype_qclass_walker.add(1);
 
-      // let qtype_second_byte_len = crate::u64toa::u8toa(buf.as_mut_ptr(), *dns_qname_qtype_qclass_walker);
-      // question_str.push_str(std::str::from_utf8(core::slice::from_raw_parts(buf.as_mut_ptr(), qtype_second_byte_len)).unwrap());
-      // dns_qname_qtype_qclass_walker = dns_qname_qtype_qclass_walker.add(1);
+         // let mut buf: [u8; 3] = core::mem::zeroed();
+         // let qtype_first_byte_len = crate::u64toa::u8toa(buf.as_mut_ptr(), *dns_qname_qtype_qclass_walker);
+         // question_str.push_str(std::str::from_utf8(core::slice::from_raw_parts(buf.as_mut_ptr(), qtype_first_byte_len)).unwrap());
+         // dns_qname_qtype_qclass_walker = dns_qname_qtype_qclass_walker.add(1);
 
-      // let qclass_first_byte_len = crate::u64toa::u8toa(buf.as_mut_ptr(), *dns_qname_qtype_qclass_walker);
-      // question_str.push_str(std::str::from_utf8(core::slice::from_raw_parts(buf.as_mut_ptr(), qclass_first_byte_len)).unwrap());
-      // dns_qname_qtype_qclass_walker = dns_qname_qtype_qclass_walker.add(1);
+         // let qtype_second_byte_len = crate::u64toa::u8toa(buf.as_mut_ptr(), *dns_qname_qtype_qclass_walker);
+         // question_str.push_str(std::str::from_utf8(core::slice::from_raw_parts(buf.as_mut_ptr(), qtype_second_byte_len)).unwrap());
+         // dns_qname_qtype_qclass_walker = dns_qname_qtype_qclass_walker.add(1);
 
-      // let qclass_second_byte_len = crate::u64toa::u8toa(buf.as_mut_ptr(), *dns_qname_qtype_qclass_walker);
-      // question_str.push_str(std::str::from_utf8(core::slice::from_raw_parts(buf.as_mut_ptr(), qclass_second_byte_len)).unwrap());
+         // let qclass_first_byte_len = crate::u64toa::u8toa(buf.as_mut_ptr(), *dns_qname_qtype_qclass_walker);
+         // question_str.push_str(std::str::from_utf8(core::slice::from_raw_parts(buf.as_mut_ptr(), qclass_first_byte_len)).unwrap());
+         // dns_qname_qtype_qclass_walker = dns_qname_qtype_qclass_walker.add(1);
+
+         // let qclass_second_byte_len = crate::u64toa::u8toa(buf.as_mut_ptr(), *dns_qname_qtype_qclass_walker);
+         // question_str.push_str(std::str::from_utf8(core::slice::from_raw_parts(buf.as_mut_ptr(), qclass_second_byte_len)).unwrap());
+      }
    }
 
    question_str

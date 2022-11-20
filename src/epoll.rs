@@ -176,7 +176,7 @@ pub fn go(port: u16) {
                //println!("cache_key_pre: {} {} -> {}", util::hash32(cache_key), debug_query, cache_key.len());
 
                {
-                  // Add to question cache
+                  // Add to QUESTION cache
 
                   let asked_timestamp = time::get_timespec();
 
@@ -185,15 +185,11 @@ pub fn go(port: u16) {
                   if !cache_guard.contains_key(&cache_key_vec) {
                      cache_guard.insert(cache_key.to_vec(), QuestionCache { asked_timestamp });
                   }
-
-                  // for item in cache_guard.iter() {
-                  //    println!("inside_cache_pre: {}", util::hash32(item.0));
-                  // }
                }
 
                {
                   // Scope for cache guard.
-                  // First check the cache and respond immediately if we already have an answer to the query
+                  // First check the ANSWER cache and respond immediately if we already have an answer to the query
 
                   let mut cache_guard = DNS_ANSWER_CACHE.lock().unwrap();
                   let cached_response_maybe = cache_guard.get_mut(cache_key);
@@ -244,8 +240,7 @@ pub fn go(port: u16) {
                   // Write to ITC sockets for upstream DNS resolution
 
                   for unix_socket in itc_client_sockets.iter() {
-                     let _ =
-                        sys_call!(SYS_WRITE as isize, *unix_socket as isize, buf_client_request_start_address, num_bytes_read);
+                     let _ = sys_call!(SYS_WRITE as isize, *unix_socket as isize, buf_client_request_start_address, num_bytes_read);
                   }
                }
             }
@@ -264,13 +259,8 @@ pub fn tls_worker(epfd: isize, itc_fd: isize, fd_client_udp_listener: isize, ups
    {
       saved_event_in_only.data.fd = itc_fd as i32;
 
-      let _ret = sys_call!(
-         SYS_EPOLL_CTL as isize,
-         epfd,
-         EPOLL_CTL_ADD as isize,
-         itc_fd,
-         &saved_event_in_only as *const epoll_event as isize
-      );
+      let _ret =
+         sys_call!(SYS_EPOLL_CTL as isize, epfd, EPOLL_CTL_ADD as isize, itc_fd, &saved_event_in_only as *const epoll_event as isize);
    }
 
    let tls_client_config = tls::get_tls_client_config();
@@ -421,7 +411,10 @@ pub fn tls_worker(epfd: isize, itc_fd: isize, fd_client_udp_listener: isize, ups
             let bytes_to_read = io_state.plaintext_bytes_to_read();
             if bytes_to_read > 0 {
                let mut response_buffer = Vec::with_capacity(bytes_to_read);
-               unsafe { response_buffer.set_len(bytes_to_read) };
+               #[allow(clippy::uninit_vec)]
+               unsafe {
+                  response_buffer.set_len(bytes_to_read)
+               };
                tls_connection.tls_conn.reader().read_exact(&mut response_buffer).unwrap();
                debug_assert!(response_buffer.len() == bytes_to_read, "Response buffer was resized when it shouldn't have been");
 
