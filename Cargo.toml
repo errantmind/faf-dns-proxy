@@ -39,7 +39,7 @@ faf-syscall = "*"
 #dnsparse = "*"
 lazy_static = "*"
 once_cell = "*"
-dns-parser = "*"
+#dns-parser = "*"
 rustls = "*"
 webpki-roots = "*"
 hashbrown = { version = "*", default-features = true, features = ["inline-more", "ahash"] }

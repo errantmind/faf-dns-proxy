@@ -172,18 +172,13 @@ pub fn go(port: u16) {
                // Extract just the id from the client request
                let id = dns::get_id_big_endian(buf_client_request.as_ptr(), num_bytes_read as usize);
                let cache_key = dns::get_query_unique_id(buf_client_request.as_ptr(), num_bytes_read as usize);
-               //let debug_query = dns::get_question_as_string(buf_client_request.as_ptr(), num_bytes_read as usize);
-               //println!("cache_key_pre: {} {} -> {}", util::hash32(cache_key), debug_query, cache_key.len());
 
                {
-                  // Add to QUESTION cache
-
-                  let asked_timestamp = time::get_timespec();
+                  // Add to QUESTION cache (only once)
 
                   let mut cache_guard = DNS_QUESTION_CACHE.lock().unwrap();
-                  let cache_key_vec = cache_key.to_vec();
-                  if !cache_guard.contains_key(&cache_key_vec) {
-                     cache_guard.insert(cache_key.to_vec(), QuestionCache { asked_timestamp });
+                  if !cache_guard.contains_key(cache_key) {
+                     cache_guard.insert(cache_key.to_vec(), QuestionCache { asked_timestamp: time::get_timespec() });
                   }
                }
 
@@ -435,9 +430,8 @@ pub fn tls_worker(epfd: isize, itc_fd: isize, fd_client_udp_listener: isize, ups
                   // Scope for guards
                   {
                      let id = dns::get_id_big_endian(response_stripped.as_ptr(), response_stripped.len());
-
-                     let mut id_router_guard = BUF_ID_ROUTER.lock().unwrap();
-                     let saved_addr = id_router_guard.get_mut(id as usize).unwrap();
+                     let id_router_guard = BUF_ID_ROUTER.lock().unwrap();
+                     let saved_addr = id_router_guard.get(id as usize).unwrap();
 
                      {
                         let cache_key = dns::get_query_unique_id(response_stripped.as_ptr(), response_stripped.len());
@@ -445,13 +439,6 @@ pub fn tls_worker(epfd: isize, itc_fd: isize, fd_client_udp_listener: isize, ups
                         let mut cache_guard = DNS_ANSWER_CACHE.lock().unwrap();
                         if !cache_guard.contains_key(cache_key) {
                            let debug_query = dns::get_question_as_string(response_stripped.as_ptr(), response_stripped.len());
-                           // println!(
-                           //    "cache_key_post: {} {} {} -> {}",
-                           //    upstream_server.1,
-                           //    util::hash32(cache_key),
-                           //    debug_query,
-                           //    cache_key.len()
-                           // );
 
                            let wrote = sys_call!(
                               SYS_SENDTO as isize,

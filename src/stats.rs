@@ -61,7 +61,7 @@ impl std::fmt::Display for Stats {
 
 pub const fn init_stats() -> [Stats; UPSTREAM_DNS_SERVERS.len()] {
    #[allow(invalid_value)]
-   let mut arr: [Stats; UPSTREAM_DNS_SERVERS.len()] = unsafe { core::mem::MaybeUninit::uninit().assume_init() };
+   let mut arr: [Stats; UPSTREAM_DNS_SERVERS.len()] = unsafe { core::mem::MaybeUninit::zeroed().assume_init() };
    let mut index = 0;
 
    while index < UPSTREAM_DNS_SERVERS.len() {

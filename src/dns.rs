@@ -120,9 +120,9 @@ pub fn get_question_as_string(dns_buf_start: *const u8, len: usize) -> String {
    question_str
 }
 
-#[inline]
-pub fn debug_parse_query<'a>(dns_buf_start: *const u8, len: usize) -> dns_parser::Packet<'a> {
-   debug_assert!(len >= 19);
-   let query_slice: &[u8] = unsafe { core::slice::from_raw_parts(dns_buf_start, len) };
-   dns_parser::Packet::parse(query_slice).unwrap()
-}
+// #[inline]
+// pub fn debug_parse_query<'a>(dns_buf_start: *const u8, len: usize) -> dns_parser::Packet<'a> {
+//    debug_assert!(len >= 19);
+//    let query_slice: &[u8] = unsafe { core::slice::from_raw_parts(dns_buf_start, len) };
+//    dns_parser::Packet::parse(query_slice).unwrap()
+// }

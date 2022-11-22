@@ -39,6 +39,7 @@ pub fn connect_helper(
       let arc_config = std::sync::Arc::new(tls_client_config.clone());
       rustls::ClientConnection::new(arc_config, upstream_dns_address).unwrap()
    };
+   
    let fd = net::tcp_connect(upstream_server.1, tls_server_port);
    let mut sock = unsafe { std::net::TcpStream::from_raw_fd(fd as i32) };
    while tls_conn.is_handshaking() {
