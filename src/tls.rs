@@ -39,18 +39,42 @@ pub fn connect_helper(
       let arc_config = std::sync::Arc::new(tls_client_config.clone());
       rustls::ClientConnection::new(arc_config, upstream_dns_address).unwrap()
    };
-   
-   let fd = net::tcp_connect(upstream_server.1, tls_server_port);
-   let mut sock = unsafe { std::net::TcpStream::from_raw_fd(fd as i32) };
-   while tls_conn.is_handshaking() {
-      let res = tls_conn.complete_io(&mut sock);
-      if res.is_err() {
-         panic!("complete_handshake FAILED: {}", res.err().unwrap());
-         //std::thread::sleep(std::time::Duration::from_micros(10));
+   let mut retry_count = 3;
+
+   loop {
+      if retry_count <= 0 {
+         panic!("failed to establish a connection to {}", upstream_server.1);
+      }
+
+      let fd = if let Some(fd) = net::tcp_connect(upstream_server.1, tls_server_port) {
+         fd
+      } else {
+         retry_count -= 1;
+         std::thread::sleep(std::time::Duration::from_millis(500));
+         continue;
+      };
+
+      let mut sock = unsafe { std::net::TcpStream::from_raw_fd(fd as i32) };
+
+      let handshake_succeeded = loop {
+         if tls_conn.is_handshaking() {
+            let res = tls_conn.complete_io(&mut sock);
+            if res.is_err() {
+               break false;
+            }
+         } else {
+            break true;
+         }
+      };
+
+      if handshake_succeeded {
+         return TlsConnectionWrapper { fd, tls_conn, sock };
+      } else {
+         retry_count -= 1;
+         std::thread::sleep(std::time::Duration::from_millis(500));
+         continue;
       }
    }
-
-   TlsConnectionWrapper { fd, tls_conn, sock }
 }
 
 #[inline]

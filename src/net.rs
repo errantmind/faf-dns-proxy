@@ -122,7 +122,7 @@ pub fn get_udp_server_socket(cpu_core: i32, host: u32, port: u16) -> UdpSocket {
 }
 
 #[inline]
-pub fn tcp_connect(host_ip: &str, port: u16) -> isize {
+pub fn tcp_connect(host_ip: &str, port: u16) -> Option<isize> {
    const OPTVAL_TCPFASTOPEN_QUEUE_LEN: isize = MAX_CONN as isize;
 
    // Send keepalive probes
@@ -232,7 +232,8 @@ pub fn tcp_connect(host_ip: &str, port: u16) -> isize {
 
       let res = sys_call!(SYS_CONNECT as isize, fd, &addr as *const _ as isize, SOCKADDR_IN_LEN as isize);
       if res < 0 {
-         panic!("SYS_CONNECT, {}", res);
+         println!("SYS_CONNECT failed with error {}", res);
+         return None;
       }
 
       const OPTVAL_SOLINGER_TIMEOUT: linger = linger { l_onoff: 1, l_linger: 0 };
@@ -255,6 +256,6 @@ pub fn tcp_connect(host_ip: &str, port: u16) -> isize {
       //    panic!("SYS_FCNTL O_NONBLOCK, {}", res);
       // }
 
-      fd
+      Some(fd)
    }
 }
