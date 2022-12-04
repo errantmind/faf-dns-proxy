@@ -28,7 +28,6 @@ mod statics;
 mod stats;
 mod time;
 mod tls;
-mod u64toa;
 mod util;
 
 #[global_allocator]

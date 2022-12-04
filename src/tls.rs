@@ -101,13 +101,6 @@ impl PersistCache {
    fn new() -> Self {
       PersistCache { cache: std::sync::Mutex::new(HashMap::new()) }
    }
-
-   fn len(&self) -> Option<usize> {
-      match self.cache.lock() {
-         Ok(n) => Some(n.len()),
-         Err(_) => None,
-      }
-   }
 }
 
 impl rustls::client::StoresClientSessions for PersistCache {

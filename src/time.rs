@@ -30,14 +30,6 @@ extern "C" {
 const CLOCK_REALTIME: i32 = 0;
 
 #[inline]
-pub fn get_epoch_seconds() -> i64 {
-   #[allow(invalid_value)]
-   let mut ts: timespec = unsafe { core::mem::MaybeUninit::uninit().assume_init() };
-   unsafe { clock_gettime(CLOCK_REALTIME, &mut ts as *mut timespec) };
-
-   ts.tv_sec
-}
-
 pub fn get_timespec() -> timespec {
    #[allow(invalid_value)]
    let mut ts: timespec = unsafe { core::mem::MaybeUninit::uninit().assume_init() };
@@ -45,6 +37,7 @@ pub fn get_timespec() -> timespec {
    ts
 }
 
+#[inline]
 pub fn get_elapsed_ms(later: &timespec, earlier: &timespec) -> i64 {
    (later.tv_sec - earlier.tv_sec) * 1_000 + (later.tv_nsec - earlier.tv_nsec) / 1_000_000
 }

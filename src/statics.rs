@@ -17,12 +17,11 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
 pub const PROJECT_NAME: &str = env!("CARGO_PKG_NAME");
-pub const PROJECT_DIR: &str = env!("CARGO_MANIFEST_DIR");
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 pub static mut ARGS: crate::args::Args = unsafe { core::mem::MaybeUninit::zeroed().assume_init() };
 
-pub static SELF_CHECKSUM: once_cell::sync::Lazy<Option<u32>> = once_cell::sync::Lazy::new(|| Some(crate::util::self_checksum().unwrap().0));
+pub static SELF_CHECKSUM: once_cell::sync::Lazy<Option<u64>> = once_cell::sync::Lazy::new(|| Some(crate::util::self_checksum().unwrap().0));
 
 // faf spawns one thread per core, meaning each thread can handle 1024 connections.
 // If we don't UNSHARE, then we can only handle 'n' total connections across all threads (instead of 'each')
@@ -31,8 +30,7 @@ pub const MAX_CONN: usize = 64;
 // the buffer size of the request buffer. Currently set to 4096 bytes (most common page size)
 pub const REQ_BUFF_SIZE: usize = 4096;
 
-// the buffer size of both the response buffers. Currently set to 4096 bytes (most common page size)
-pub const RES_BUFF_SIZE: usize = 4096;
+
 
 // our syscall to wait for epoll events will timeout every 1ms. This is marginally faster in some cases than a longer timeout
 pub const EPOLL_TIMEOUT_MILLIS: isize = 1000;
