@@ -24,6 +24,7 @@ mod const_sys;
 mod dns;
 mod epoll;
 mod net;
+mod proxy;
 mod statics;
 mod stats;
 mod time;
@@ -47,7 +48,7 @@ pub fn main() {
       print_version();
    }
 
-   epoll::go(53);
+   tokio::runtime::Runtime::new().unwrap().block_on(proxy::go(5333));
 }
 
 fn print_banner() {

@@ -44,3 +44,7 @@ rustls = "*"
 webpki-roots = "*"
 hashbrown = { version = "*", default-features = true, features = ["inline-more", "ahash"] }
 xxhash-rust = { version = "*", default-features = false, features = ["xxh3"] }
+
+# async runtime/executor
+tokio = { version = "*", features = ["rt-multi-thread", "net", "io-util", "time", "macros", "parking_lot"] }
+tokio-rustls = "*"
