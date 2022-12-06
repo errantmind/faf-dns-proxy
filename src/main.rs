@@ -48,7 +48,7 @@ pub fn main() {
       print_version();
    }
 
-   tokio::runtime::Runtime::new().unwrap().block_on(proxy::go(5333));
+   tokio::runtime::Runtime::new().unwrap().block_on(proxy::go(5334));
 }
 
 fn print_banner() {

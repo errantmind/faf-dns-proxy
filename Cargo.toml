@@ -33,7 +33,7 @@ default = []
 mimalloc = { version = "*", default-features = false }
 
 # command line parser
-clap = { version = "3.1.18", default-features = true, features = ["derive"] }
+clap = { version = "*", default-features = true, features = ["derive"] }
 
 faf-syscall = "*"
 #dnsparse = "*"
@@ -46,5 +46,7 @@ hashbrown = { version = "*", default-features = true, features = ["inline-more",
 xxhash-rust = { version = "*", default-features = false, features = ["xxh3"] }
 
 # async runtime/executor
-tokio = { version = "*", features = ["rt-multi-thread", "net", "io-util", "time", "macros", "parking_lot"] }
+tokio = { version = "*", features = ["rt-multi-thread", "net", "io-util", "time", "macros", "parking_lot", "sync"] }
 tokio-rustls = "*"
+
+#crossbeam = "*"
