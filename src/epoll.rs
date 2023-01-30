@@ -107,7 +107,7 @@ pub fn go(port: u16) {
       let upstream_worker_epfd = upstream_worker_epfds[i];
       let itc_fd = itc_server_sockets[i];
       let client_udp_socket_fd = client_udp_socket.fd;
-      let thread_name = format!("faf{}", UPSTREAM_DNS_SERVERS[i].1);
+      let thread_name = format!("faf{}", UPSTREAM_DNS_SERVERS[i].ip);
       let thread_builder = std::thread::Builder::new().name(thread_name).stack_size(1024 * 1024);
       let _ = thread_builder.spawn(move || {
          // Unshare the file descriptor table between threads to keep the fd number itself low, otherwise all
@@ -462,8 +462,8 @@ pub fn tls_worker(epfd: isize, itc_fd: isize, fd_client_udp_listener: isize, ups
 
                            unsafe {
                               if !crate::statics::ARGS.daemon {
-                                 let fastest_count = stats::Stats::array_increment_fastest(&mut STATS, upstream_server.1);
-                                 println!("{:>4}ms -> {} ({} [{}])", elapsed_ms, debug_query, upstream_server.1, fastest_count);
+                                 let fastest_count = stats::Stats::array_increment_fastest(&mut STATS, upstream_server.ip);
+                                 println!("{:>4}ms -> {} ({} [{}])", elapsed_ms, debug_query, upstream_server.ip, fastest_count);
                               }
                            }
                         }

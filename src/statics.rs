@@ -30,8 +30,6 @@ pub const MAX_CONN: usize = 64;
 // the buffer size of the request buffer. Currently set to 4096 bytes (most common page size)
 pub const REQ_BUFF_SIZE: usize = 4096;
 
-
-
 // our syscall to wait for epoll events will timeout every 1ms. This is marginally faster in some cases than a longer timeout
 pub const EPOLL_TIMEOUT_MILLIS: isize = 1000;
 
@@ -41,11 +39,15 @@ pub const MAX_EPOLL_EVENTS_RETURNED: usize = 340;
 // isolate to core 0
 pub const CPU_CORE_CLIENT_LISTENER: usize = 0;
 
-pub struct UpstreamDnsServer(pub &'static str, pub &'static str);
+pub struct UpstreamDnsServer {
+   pub server_name: &'static str,
+   pub ip: &'static str,
+}
+
 pub const UPSTREAM_DNS_SERVERS: [UpstreamDnsServer; 5] = [
-   UpstreamDnsServer("one.one.one.one", "1.1.1.1"),
-   UpstreamDnsServer("one.one.one.one", "1.0.0.1"),
-   UpstreamDnsServer("dns.google", "8.8.8.8"),
-   UpstreamDnsServer("dns.google", "8.8.4.4"),
-   UpstreamDnsServer("dns.quad9.net", "9.9.9.9"),
+   UpstreamDnsServer { server_name: "one.one.one.one", ip: "1.1.1.1" },
+   UpstreamDnsServer { server_name: "one.one.one.one", ip: "1.0.0.1" },
+   UpstreamDnsServer { server_name: "dns.google", ip: "8.8.8.8" },
+   UpstreamDnsServer { server_name: "dns.google", ip: "8.8.4.4" },
+   UpstreamDnsServer { server_name: "dns.quad9.net", ip: "9.9.9.9" },
 ];

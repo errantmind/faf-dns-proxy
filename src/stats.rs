@@ -52,7 +52,7 @@ pub const fn init_stats() -> [Stats; UPSTREAM_DNS_SERVERS.len()] {
    let mut index = 0;
 
    while index < UPSTREAM_DNS_SERVERS.len() {
-      arr[index] = Stats { dns_ip: UPSTREAM_DNS_SERVERS[index].1, fastest_count: 0 };
+      arr[index] = Stats { dns_ip: UPSTREAM_DNS_SERVERS[index].ip, fastest_count: 0 };
       index += 1;
    }
 
