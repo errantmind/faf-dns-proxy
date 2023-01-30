@@ -34,23 +34,29 @@ pub fn connect_helper(
    tls_server_port: u16,
    tls_client_config: &rustls::ClientConfig,
 ) -> TlsConnectionWrapper {
+   fn is_power_of_2(num: i32) -> bool {
+      num & (num - 1) == 0
+   }
+
    let mut tls_conn = {
-      let upstream_dns_address: rustls::ServerName = upstream_server.0.try_into().unwrap();
+      let upstream_dns_address: rustls::ServerName = upstream_server.server_name.try_into().unwrap();
       let arc_config = std::sync::Arc::new(tls_client_config.clone());
       rustls::ClientConnection::new(arc_config, upstream_dns_address).unwrap()
    };
-   let mut retry_count = 3;
+
+   let mut connection_failures = 0;
+   let mut handshake_failures = 0;
 
    loop {
-      if retry_count <= 0 {
-         panic!("failed to establish a connection to {}", upstream_server.1);
-      }
-
-      let fd = if let Some(fd) = net::tcp_connect(upstream_server.1, tls_server_port) {
+      let fd = if let Some(fd) = net::tcp_connect(upstream_server.ip, tls_server_port) {
          fd
       } else {
-         retry_count -= 1;
-         std::thread::sleep(std::time::Duration::from_millis(500));
+         connection_failures += 1;
+         if is_power_of_2(connection_failures) {
+            println!("failed {}x times connecting to: {}", connection_failures, upstream_server.ip);
+         }
+
+         std::thread::sleep(std::time::Duration::from_millis(1000));
          continue;
       };
 
@@ -70,8 +76,11 @@ pub fn connect_helper(
       if handshake_succeeded {
          return TlsConnectionWrapper { fd, tls_conn, sock };
       } else {
-         retry_count -= 1;
-         std::thread::sleep(std::time::Duration::from_millis(500));
+         handshake_failures += 1;
+         if is_power_of_2(handshake_failures) {
+            println!("failed {}x times handshaking with: {}", handshake_failures, upstream_server.ip);
+         }
+         std::thread::sleep(std::time::Duration::from_millis(1000));
          continue;
       }
    }
