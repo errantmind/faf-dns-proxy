@@ -17,16 +17,13 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
 #![allow(clippy::missing_safety_doc, clippy::uninit_assumed_init, dead_code)]
-#![feature(const_size_of_val, const_maybe_uninit_zeroed, core_intrinsics, const_mut_refs, const_for, inline_const)]
+#![feature(const_size_of_val, const_maybe_uninit_zeroed, core_intrinsics, const_mut_refs, const_for, inline_const, const_socketaddr)]
 
 mod args;
 mod const_sys;
 mod dns;
-mod epoll;
-mod net;
 mod proxy;
 mod statics;
-mod stats;
 mod time;
 mod tls;
 mod util;
@@ -48,6 +45,7 @@ pub fn main() {
       print_version();
    }
 
+   util::set_maximum_process_priority();
    tokio::runtime::Runtime::new().unwrap().block_on(proxy::go(5334));
 }
 
