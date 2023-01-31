@@ -5,6 +5,8 @@ pub struct UpstreamDnsServer {
    pub socket_addr: std::net::SocketAddrV4,
 }
 
+static mut STATS: [crate::stats::Stats; UPSTREAM_DNS_SERVERS.len()] = crate::stats::init_stats();
+
 pub const UPSTREAM_DNS_SERVERS: [UpstreamDnsServer; 5] = [
    UpstreamDnsServer { server_name: "one.one.one.one", socket_addr: std::net::SocketAddrV4::new(std::net::Ipv4Addr::new(1, 1, 1, 1), 853) },
    UpstreamDnsServer { server_name: "one.one.one.one", socket_addr: std::net::SocketAddrV4::new(std::net::Ipv4Addr::new(1, 0, 0, 1), 853) },
@@ -49,7 +51,7 @@ pub async fn go(port: u16) {
 
       for dns in &UPSTREAM_DNS_SERVERS {
          let (tx, rx) = tokio::sync::mpsc::channel(8192);
-         tokio::task::spawn(upstream_tls_handler(rx, dns));
+         tokio::task::spawn(upstream_tls_handler(rx, dns, listener_socket.clone()));
          tx_channels.push(tx);
       }
 
@@ -120,7 +122,7 @@ pub async fn go(port: u16) {
          // Write both bytes at once after converting to Big Endian
          unsafe { *(query_buf.as_mut_ptr() as *mut u16) = (read_bytes as u16).to_be() };
          for tx in &tx_channels {
-            tx.send((query_buf[0..read_bytes + 2].to_vec(), listener_socket.clone(), client_addr)).await;
+            tx.send(query_buf[0..read_bytes + 2].to_vec()).await;
          }
       }
    })
@@ -129,8 +131,9 @@ pub async fn go(port: u16) {
 }
 
 pub async fn upstream_tls_handler(
-   mut msg_rx: tokio::sync::mpsc::Receiver<(Vec<u8>, std::sync::Arc<tokio::net::UdpSocket>, std::net::SocketAddr)>,
+   mut msg_rx: tokio::sync::mpsc::Receiver<Vec<u8>>,
    upstream_dns: &UpstreamDnsServer,
+   listener_addr: std::sync::Arc<tokio::net::UdpSocket>,
 ) {
    let tls_client_config = crate::tls::get_tls_client_config();
    let tls_connector = tokio_rustls::TlsConnector::from(std::sync::Arc::new(tls_client_config));
@@ -140,16 +143,35 @@ pub async fn upstream_tls_handler(
    let mut response_buf = vec![0; 514];
 
    loop {
-      let msg_maybe = msg_rx.recv().await;
-      let (query_buf, listener_addr, client_addr) = match msg_maybe {
-         Some(data) => data,
-         None => continue,
+      //let msg_maybe = msg_rx.recv().await;
+      let msg_maybe = match tokio::time::timeout(std::time::Duration::from_nanos(100000), msg_rx.recv()).await {
+         Ok(msg_maybe) => match msg_maybe {
+            Some(data) => Some(data),
+            None => {
+               panic!("Channel has been closed prematurely");
+            }
+         },
+         Err(_) => None,
       };
-      let start_time = crate::time::get_timespec();
 
-      loop {
-         let read_bytes_maybe = match tokio::io::AsyncWriteExt::write_all(&mut stream_write, &query_buf).await {
-            Ok(_) => match tokio::io::AsyncReadExt::read(&mut stream_read, &mut response_buf).await {
+      if let Some((query_buf)) = msg_maybe {
+
+         loop {
+            match tokio::io::AsyncWriteExt::write_all(&mut stream_write, &query_buf).await {
+               Ok(_) => break,
+               Err(_) => (stream_read, stream_write) = connect(&tls_connector, upstream_dns).await,
+            };
+         }
+      } else {
+         // No request for writes, try reads
+
+         let read_bytes_maybe = match tokio::time::timeout(
+            std::time::Duration::from_nanos(100000),
+            tokio::io::AsyncReadExt::read(&mut stream_read, &mut response_buf),
+         )
+         .await
+         {
+            Ok(msg_maybe) => match msg_maybe {
                Ok(0) => None,
                Ok(n) => Some(n),
                Err(_) => None,
@@ -159,10 +181,7 @@ pub async fn upstream_tls_handler(
 
          let read_bytes_tcp = match read_bytes_maybe {
             Some(n) => n,
-            None => {
-               (stream_read, stream_write) = connect(&tls_connector, upstream_dns).await;
-               continue;
-            }
+            None => continue,
          };
 
          assert!(read_bytes_tcp <= 514, "Received a response with > 512 bytes from upstream socket ({})", read_bytes_tcp);
@@ -189,8 +208,6 @@ pub async fn upstream_tls_handler(
             {
                let mut cache_guard = DNS_ANSWER_CACHE.lock().await;
                if !cache_guard.contains_key(cache_key) {
-                  let debug_query = crate::dns::get_question_as_string(udp_segment.as_ptr(), udp_segment.len());
-
                   let wrote = listener_addr.send_to(udp_segment, &saved_addr).await.unwrap();
 
                   if wrote == 0 {
@@ -201,26 +218,37 @@ pub async fn upstream_tls_handler(
                      &crate::time::get_timespec(),
                      &DNS_QUESTION_CACHE.lock().await.get(cache_key).unwrap().asked_timestamp,
                   );
+
                   cache_guard.insert(cache_key.to_vec(), AnswerCache { answer: udp_segment.to_vec(), elapsed_ms, ttl: 0 });
 
-                  // unsafe {
-                  //    if !crate::statics::ARGS.daemon {
-                  //       let fastest_count = crate::stats::Stats::array_increment_fastest(&mut STATS, upstream_server.ip);
-                  //       println!("{:>4}ms -> {} ({} [{}])", elapsed_ms, debug_query, upstream_server.ip, fastest_count);
-                  //    }
-                  // }
+                  unsafe {
+                     if !crate::statics::ARGS.daemon {
+                        let debug_query = crate::dns::get_question_as_string(udp_segment.as_ptr(), udp_segment_len);
+                        let fastest_count =
+                           crate::stats::Stats::array_increment_fastest(&mut STATS, format!("{}", upstream_dns.socket_addr.ip()).as_str());
+                        println!(
+                           "{:>4}ms -> {} ({} [{}])",
+                           elapsed_ms,
+                           debug_query,
+                           format!("{}", upstream_dns.socket_addr.ip()).as_str(),
+                           fastest_count
+                        );
+                     }
+                  }
                }
             }
          }
 
-         {
-            let elapsed_ms = crate::time::get_elapsed_ms(&crate::time::get_timespec(), &start_time);
-            let debug_query = crate::dns::get_question_as_string(udp_segment.as_ptr(), udp_segment_len);
-            println!("{:>4}ms -> {} ({})", elapsed_ms, debug_query, upstream_dns.socket_addr.ip());
-         }
-
-         break;
+         // {
+         //    let elapsed_ms = crate::time::get_elapsed_ms(&crate::time::get_timespec(), &start_time);
+         //    let debug_query = crate::dns::get_question_as_string(udp_segment.as_ptr(), udp_segment_len);
+         //    println!("{:>4}ms -> {} ({})", elapsed_ms, debug_query, upstream_dns.socket_addr.ip());
+         // }
       }
+      // let (query_buf, listener_addr, client_addr) = match msg_maybe {
+      //    Some(data) => data,
+      //    None => continue,
+      // };
    }
 }
 
