@@ -27,6 +27,8 @@ mod statics;
 mod time;
 mod tls;
 mod util;
+mod net;
+mod stats;
 
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
