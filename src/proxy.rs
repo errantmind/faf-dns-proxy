@@ -7,6 +7,8 @@ pub struct UpstreamDnsServer {
 
 static mut STATS: [crate::stats::Stats; UPSTREAM_DNS_SERVERS.len()] = crate::stats::init_stats();
 
+static mut INFLIGHT_COUNTER: isize = 0;
+
 pub const UPSTREAM_DNS_SERVERS: [UpstreamDnsServer; 5] = [
    UpstreamDnsServer { server_name: "one.one.one.one", socket_addr: std::net::SocketAddrV4::new(std::net::Ipv4Addr::new(1, 1, 1, 1), 853) },
    UpstreamDnsServer { server_name: "one.one.one.one", socket_addr: std::net::SocketAddrV4::new(std::net::Ipv4Addr::new(1, 0, 0, 1), 853) },
@@ -92,7 +94,7 @@ pub async fn go(port: u16) {
 
             if let Some(cached_response) = cached_response_maybe {
                crate::dns::set_id_big_endian(id, &mut cached_response.answer);
-               let wrote = listener_socket.send_to(udp_segment, &client_addr).await.unwrap();
+               let wrote = listener_socket.send_to(&cached_response.answer, &client_addr).await.unwrap();
 
                if wrote == 0 {
                   panic!("Wrote nothing to client after fetching data from cache")
@@ -114,15 +116,23 @@ pub async fn go(port: u16) {
 
          {
             // Save the client state
+            BUF_ID_ROUTER.lock().await.insert(id, client_addr);
+         }
 
-            let mut id_router_guard = BUF_ID_ROUTER.lock().await;
-            id_router_guard.insert(id, client_addr);
+         {
+            // Increment 'leak detector'
+            unsafe {
+               INFLIGHT_COUNTER += 1;
+            }
          }
 
          // Write both bytes at once after converting to Big Endian
          unsafe { *(query_buf.as_mut_ptr() as *mut u16) = (read_bytes as u16).to_be() };
          for tx in &tx_channels {
-            tx.send(query_buf[0..read_bytes + 2].to_vec()).await;
+            match tx.send(query_buf[0..read_bytes + 2].to_vec()).await {
+               Ok(_) => (),
+               Err(err) => panic!("{}", err),
+            };
          }
       }
    })
@@ -138,13 +148,12 @@ pub async fn upstream_tls_handler(
    let tls_client_config = crate::tls::get_tls_client_config();
    let tls_connector = tokio_rustls::TlsConnector::from(std::sync::Arc::new(tls_client_config));
 
-   let (mut stream_read, mut stream_write) = connect(&tls_connector, upstream_dns).await;
+   let mut tls_stream = connect(&tls_connector, upstream_dns).await;
 
    let mut response_buf = vec![0; 514];
 
    loop {
-      //let msg_maybe = msg_rx.recv().await;
-      let msg_maybe = match tokio::time::timeout(std::time::Duration::from_nanos(100000), msg_rx.recv()).await {
+      let msg_maybe = match tokio::time::timeout(std::time::Duration::from_nanos(10000000), msg_rx.recv()).await {
          Ok(msg_maybe) => match msg_maybe {
             Some(data) => Some(data),
             None => {
@@ -154,20 +163,35 @@ pub async fn upstream_tls_handler(
          Err(_) => None,
       };
 
-      if let Some((query_buf)) = msg_maybe {
-
+      if let Some(query_buf) = msg_maybe {
          loop {
-            match tokio::io::AsyncWriteExt::write_all(&mut stream_write, &query_buf).await {
-               Ok(_) => break,
-               Err(_) => (stream_read, stream_write) = connect(&tls_connector, upstream_dns).await,
-            };
+            // If we have a query from our local listener, write it to the upstream DNS server.
+            //
+            // We need the below convoluted logic because there doesn't appear to be any way to detect HUPs (hangups).
+            // So, say we get silently disconnected by DNS server (google DNS, cloudflare, etc), a simple `write` call will succeed (!),
+            //   which makes us believe the write was successful, even though it was never delivered.
+            // We NEED a way to know if we still have a 'valid' connection.
+            //
+            if let Ok(ready_status) = tls_stream.get_ref().0.ready(tokio::io::Interest::READABLE | tokio::io::Interest::WRITABLE).await {
+               if !ready_status.is_read_closed() && !ready_status.is_write_closed() {
+                  if let Ok(bytes_written) = tokio::io::AsyncWriteExt::write(&mut tls_stream, &query_buf).await {
+                     println!("OK Write to {}, {} bytes written to socket", upstream_dns.server_name, bytes_written);
+                     break;
+                  }
+               }
+            }
+
+            tls_stream = {
+               println!("reconnecting to {}", upstream_dns.server_name);
+               connect(&tls_connector, upstream_dns).await
+            }
          }
       } else {
          // No request for writes, try reads
 
          let read_bytes_maybe = match tokio::time::timeout(
-            std::time::Duration::from_nanos(100000),
-            tokio::io::AsyncReadExt::read(&mut stream_read, &mut response_buf),
+            std::time::Duration::from_nanos(1_000_000),
+            tokio::io::AsyncReadExt::read(&mut tls_stream, &mut response_buf),
          )
          .await
          {
@@ -200,18 +224,26 @@ pub async fn upstream_tls_handler(
 
          // Scope for guards
          {
-            let id = crate::dns::get_id_big_endian(udp_segment.as_ptr(), udp_segment.len());
-            let id_router_guard = BUF_ID_ROUTER.lock().await;
-            let saved_addr = id_router_guard.get(&id).unwrap();
-            let cache_key = crate::dns::get_query_unique_id(udp_segment.as_ptr(), udp_segment.len());
-
             {
+               let id = crate::dns::get_id_big_endian(udp_segment.as_ptr(), udp_segment.len());
+               let cache_key = crate::dns::get_query_unique_id(udp_segment.as_ptr(), udp_segment.len());
                let mut cache_guard = DNS_ANSWER_CACHE.lock().await;
                if !cache_guard.contains_key(cache_key) {
+                  let id_router_guard = BUF_ID_ROUTER.lock().await;
+                  let saved_addr = id_router_guard.get(&id).unwrap();
+
                   let wrote = listener_addr.send_to(udp_segment, &saved_addr).await.unwrap();
 
                   if wrote == 0 {
                      panic!("Wrote nothing to client after receiving data from upstream")
+                  }
+
+                  {
+                     // Decrement 'leak detector'
+                     unsafe {
+                        INFLIGHT_COUNTER -= 1;
+                        println!("| Remaining In Flight: {}", INFLIGHT_COUNTER);
+                     }
                   }
 
                   let elapsed_ms = crate::time::get_elapsed_ms(
@@ -223,7 +255,7 @@ pub async fn upstream_tls_handler(
 
                   unsafe {
                      if !crate::statics::ARGS.daemon {
-                        let debug_query = crate::dns::get_question_as_string(udp_segment.as_ptr(), udp_segment_len);
+                        let debug_query = crate::dns::get_question_as_string(udp_segment.as_ptr(), udp_segment.len());
                         let fastest_count =
                            crate::stats::Stats::array_increment_fastest(&mut STATS, format!("{}", upstream_dns.socket_addr.ip()).as_str());
                         println!(
@@ -245,20 +277,13 @@ pub async fn upstream_tls_handler(
          //    println!("{:>4}ms -> {} ({})", elapsed_ms, debug_query, upstream_dns.socket_addr.ip());
          // }
       }
-      // let (query_buf, listener_addr, client_addr) = match msg_maybe {
-      //    Some(data) => data,
-      //    None => continue,
-      // };
    }
 }
 
 async fn connect(
    tls_connector: &tokio_rustls::TlsConnector,
    upstream_dns: &UpstreamDnsServer,
-) -> (
-   tokio::io::ReadHalf<tokio_rustls::client::TlsStream<tokio::net::TcpStream>>,
-   tokio::io::WriteHalf<tokio_rustls::client::TlsStream<tokio::net::TcpStream>>,
-) {
+) -> tokio_rustls::client::TlsStream<tokio::net::TcpStream> {
    fn is_power_of_2(num: i32) -> bool {
       num & (num - 1) == 0
    }
@@ -286,6 +311,9 @@ async fn connect(
          }
       };
 
+      let _ = tcp_stream.set_linger(None);
+      let _ = tcp_stream.set_nodelay(true);
+
       let tls_stream = match tls_connector.connect(rustls::ServerName::try_from(upstream_dns.server_name).unwrap(), tcp_stream).await {
          Ok(stream) => stream,
          Err(err) => {
@@ -299,6 +327,6 @@ async fn connect(
          }
       };
 
-      break tokio::io::split(tls_stream);
+      break tls_stream;
    }
 }
