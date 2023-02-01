@@ -24,7 +24,7 @@ use crate::stats;
 use crate::time;
 use crate::tls;
 use crate::util;
-use crate::util::get_num_logical_cpus;
+
 use core::intrinsics::likely;
 use std::io::Read;
 use std::io::Write;
@@ -102,7 +102,7 @@ pub fn go(port: u16) {
       itc_client_sockets.push(sockets[1]);
    }
 
-   let num_cpus = get_num_logical_cpus();
+   //let num_cpus = get_num_logical_cpus();
    for i in 0..UPSTREAM_DNS_SERVERS.len() {
       let upstream_worker_epfd = upstream_worker_epfds[i];
       let itc_fd = itc_server_sockets[i];
@@ -113,7 +113,7 @@ pub fn go(port: u16) {
          // Unshare the file descriptor table between threads to keep the fd number itself low, otherwise all
          // threads will share the same file descriptor table
          util::unshare_file_descriptors();
-         util::set_current_thread_cpu_affinity_to(i % num_cpus);
+         //util::set_current_thread_cpu_affinity_to(i % num_cpus);
          tls_worker(upstream_worker_epfd, itc_fd as isize, client_udp_socket_fd, &UPSTREAM_DNS_SERVERS[i]);
       });
    }

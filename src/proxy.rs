@@ -71,7 +71,6 @@ pub async fn go(port: u16) {
          };
          assert!(read_bytes <= 512, "Received a datagram with > 512 bytes on the listening socket");
          let udp_segment = &query_buf[2..read_bytes + 2];
-         //println!("read_buff len: {}, read: {}", query_buf.len(), read_bytes);
 
          let id = crate::dns::get_id_big_endian(udp_segment.as_ptr(), udp_segment.len());
          let cache_key = crate::dns::get_query_unique_id(udp_segment.as_ptr(), udp_segment.len());
@@ -150,10 +149,10 @@ pub async fn upstream_tls_handler(
 
    let mut tls_stream = connect(&tls_connector, upstream_dns).await;
 
-   let mut response_buf = vec![0; 514];
+   let mut response_buf = vec![0; 2 << 15];
 
    loop {
-      let msg_maybe = match tokio::time::timeout(std::time::Duration::from_nanos(10000000), msg_rx.recv()).await {
+      let msg_maybe = match tokio::time::timeout(std::time::Duration::from_nanos(100_000), msg_rx.recv()).await {
          Ok(msg_maybe) => match msg_maybe {
             Some(data) => Some(data),
             None => {
@@ -174,23 +173,19 @@ pub async fn upstream_tls_handler(
             //
             if let Ok(ready_status) = tls_stream.get_ref().0.ready(tokio::io::Interest::READABLE | tokio::io::Interest::WRITABLE).await {
                if !ready_status.is_read_closed() && !ready_status.is_write_closed() {
-                  if let Ok(bytes_written) = tokio::io::AsyncWriteExt::write(&mut tls_stream, &query_buf).await {
-                     println!("OK Write to {}, {} bytes written to socket", upstream_dns.server_name, bytes_written);
+                  if let Ok(_bytes_written_to_socket) = tokio::io::AsyncWriteExt::write(&mut tls_stream, &query_buf).await {
                      break;
                   }
                }
             }
 
-            tls_stream = {
-               println!("reconnecting to {}", upstream_dns.server_name);
-               connect(&tls_connector, upstream_dns).await
-            }
+            tls_stream = connect(&tls_connector, upstream_dns).await
          }
       } else {
          // No request for writes, try reads
 
          let read_bytes_maybe = match tokio::time::timeout(
-            std::time::Duration::from_nanos(1_000_000),
+            std::time::Duration::from_nanos(100_000),
             tokio::io::AsyncReadExt::read(&mut tls_stream, &mut response_buf),
          )
          .await
@@ -208,66 +203,77 @@ pub async fn upstream_tls_handler(
             None => continue,
          };
 
-         assert!(read_bytes_tcp <= 514, "Received a response with > 512 bytes from upstream socket ({})", read_bytes_tcp);
-         assert!(read_bytes_tcp > 2, "Received a response with <= 2 bytes from upstream socket ({})", read_bytes_tcp);
+         let mut offset = 0;
+         loop {
+            let udp_segment_len = crate::dns::get_tcp_dns_size_prefix_le(&response_buf[offset..]);
+            assert!(udp_segment_len > 0 && udp_segment_len <= 512, "Tcp reported len is invalid ({})", udp_segment_len);
+            assert!(
+               udp_segment_len <= (read_bytes_tcp - 2),
+               "Udp segment length cannot be larger than the TCP wrapper ({}/{})",
+               udp_segment_len,
+               read_bytes_tcp
+            );
 
-         let udp_segment_len = crate::dns::get_tcp_dns_size_prefix_le(&response_buf);
-         assert!(udp_segment_len > 0 && udp_segment_len <= 512, "Tcp reported len is invalid ({})", udp_segment_len);
-         assert!(
-            udp_segment_len <= (read_bytes_tcp - 2),
-            "Udp segment length cannot be larger than the TCP wrapper ({}/{})",
-            udp_segment_len,
-            read_bytes_tcp
-         );
+            let udp_segment_no_tcp_prefix = &response_buf[offset + 2..offset + udp_segment_len + 2];
 
-         let udp_segment = &response_buf[2..udp_segment_len + 2];
-
-         // Scope for guards
-         {
+            // Scope for guards
             {
-               let id = crate::dns::get_id_big_endian(udp_segment.as_ptr(), udp_segment.len());
-               let cache_key = crate::dns::get_query_unique_id(udp_segment.as_ptr(), udp_segment.len());
-               let mut cache_guard = DNS_ANSWER_CACHE.lock().await;
-               if !cache_guard.contains_key(cache_key) {
-                  let id_router_guard = BUF_ID_ROUTER.lock().await;
-                  let saved_addr = id_router_guard.get(&id).unwrap();
+               {
+                  let id = crate::dns::get_id_big_endian(udp_segment_no_tcp_prefix.as_ptr(), udp_segment_no_tcp_prefix.len());
+                  let cache_key = crate::dns::get_query_unique_id(udp_segment_no_tcp_prefix.as_ptr(), udp_segment_no_tcp_prefix.len());
+                  let mut cache_guard = DNS_ANSWER_CACHE.lock().await;
+                  if !cache_guard.contains_key(cache_key) {
+                     let id_router_guard = BUF_ID_ROUTER.lock().await;
+                     let saved_addr = id_router_guard.get(&id).unwrap();
 
-                  let wrote = listener_addr.send_to(udp_segment, &saved_addr).await.unwrap();
+                     let wrote = listener_addr.send_to(udp_segment_no_tcp_prefix, &saved_addr).await.unwrap();
 
-                  if wrote == 0 {
-                     panic!("Wrote nothing to client after receiving data from upstream")
-                  }
-
-                  {
-                     // Decrement 'leak detector'
-                     unsafe {
-                        INFLIGHT_COUNTER -= 1;
-                        println!("| Remaining In Flight: {}", INFLIGHT_COUNTER);
+                     if wrote == 0 {
+                        panic!("Wrote nothing to client after receiving data from upstream")
                      }
-                  }
 
-                  let elapsed_ms = crate::time::get_elapsed_ms(
-                     &crate::time::get_timespec(),
-                     &DNS_QUESTION_CACHE.lock().await.get(cache_key).unwrap().asked_timestamp,
-                  );
+                     {
+                        // Decrement 'leak detector'
+                        unsafe {
+                           INFLIGHT_COUNTER -= 1;
+                           if INFLIGHT_COUNTER > 8 {
+                              println!("| Possibly lost queries: {}", INFLIGHT_COUNTER);
+                           }
+                        }
+                     }
 
-                  cache_guard.insert(cache_key.to_vec(), AnswerCache { answer: udp_segment.to_vec(), elapsed_ms, ttl: 0 });
+                     let elapsed_ms = crate::time::get_elapsed_ms(
+                        &crate::time::get_timespec(),
+                        &DNS_QUESTION_CACHE.lock().await.get(cache_key).unwrap().asked_timestamp,
+                     );
 
-                  unsafe {
-                     if !crate::statics::ARGS.daemon {
-                        let debug_query = crate::dns::get_question_as_string(udp_segment.as_ptr(), udp_segment.len());
-                        let fastest_count =
-                           crate::stats::Stats::array_increment_fastest(&mut STATS, format!("{}", upstream_dns.socket_addr.ip()).as_str());
-                        println!(
-                           "{:>4}ms -> {} ({} [{}])",
-                           elapsed_ms,
-                           debug_query,
-                           format!("{}", upstream_dns.socket_addr.ip()).as_str(),
-                           fastest_count
-                        );
+                     cache_guard.insert(cache_key.to_vec(), AnswerCache { answer: udp_segment_no_tcp_prefix.to_vec(), elapsed_ms, ttl: 0 });
+
+                     unsafe {
+                        if !crate::statics::ARGS.daemon {
+                           let debug_query =
+                              crate::dns::get_question_as_string(udp_segment_no_tcp_prefix.as_ptr(), udp_segment_no_tcp_prefix.len());
+                           let fastest_count = crate::stats::Stats::array_increment_fastest(
+                              &mut STATS,
+                              format!("{}", upstream_dns.socket_addr.ip()).as_str(),
+                           );
+                           println!(
+                              "{:>4}ms -> {} ({} [{}])",
+                              elapsed_ms,
+                              debug_query,
+                              format!("{}", upstream_dns.socket_addr.ip()).as_str(),
+                              fastest_count
+                           );
+                        }
                      }
                   }
                }
+            }
+
+            offset += udp_segment_len + 2;
+
+            if offset == read_bytes_tcp {
+               break;
             }
          }
 

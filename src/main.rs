@@ -30,6 +30,7 @@ mod util;
 mod net;
 mod stats;
 
+
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
@@ -48,7 +49,7 @@ pub fn main() {
    }
 
    util::set_maximum_process_priority();
-   tokio::runtime::Runtime::new().unwrap().block_on(proxy::go(5334));
+   tokio::runtime::Runtime::new().unwrap().block_on(proxy::go(53));
 }
 
 fn print_banner() {
