@@ -19,7 +19,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 use crate::statics::*;
 
 pub struct Stats {
-   pub dns_ip: &'static str,
+   pub dns_ip: String,
    pub fastest_count: usize,
 }
 
@@ -28,6 +28,7 @@ impl Stats {
       self.fastest_count += 1;
    }
 
+   /// Could be slow if there are a large number of DNS servers
    pub fn array_increment_fastest(stat_array: &mut [Self], dns_ip_key: &str) -> usize {
       for stats in stat_array {
          if stats.dns_ip == dns_ip_key {
@@ -46,13 +47,13 @@ impl std::fmt::Display for Stats {
    }
 }
 
-pub const fn init_stats() -> [Stats; UPSTREAM_DNS_SERVERS.len()] {
+pub fn init_stats() -> [Stats; UPSTREAM_DNS_SERVERS.len()] {
    #[allow(invalid_value)]
    let mut arr: [Stats; UPSTREAM_DNS_SERVERS.len()] = unsafe { core::mem::MaybeUninit::zeroed().assume_init() };
    let mut index = 0;
 
    while index < UPSTREAM_DNS_SERVERS.len() {
-      arr[index] = Stats { dns_ip: UPSTREAM_DNS_SERVERS[index].ip, fastest_count: 0 };
+      arr[index] = Stats { dns_ip: UPSTREAM_DNS_SERVERS[index].socket_addr.ip().to_string(), fastest_count: 0 };
       index += 1;
    }
 

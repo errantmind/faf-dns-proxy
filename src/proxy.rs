@@ -18,22 +18,8 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 use hashbrown::HashMap;
 
-pub struct UpstreamDnsServer {
-   pub server_name: &'static str,
-   pub socket_addr: std::net::SocketAddrV4,
-}
-
-static mut STATS: [crate::stats::Stats; UPSTREAM_DNS_SERVERS.len()] = crate::stats::init_stats();
-
-static mut INFLIGHT_COUNTER: isize = 0;
-
-pub const UPSTREAM_DNS_SERVERS: [UpstreamDnsServer; 5] = [
-   UpstreamDnsServer { server_name: "one.one.one.one", socket_addr: std::net::SocketAddrV4::new(std::net::Ipv4Addr::new(1, 1, 1, 1), 853) },
-   UpstreamDnsServer { server_name: "one.one.one.one", socket_addr: std::net::SocketAddrV4::new(std::net::Ipv4Addr::new(1, 0, 0, 1), 853) },
-   UpstreamDnsServer { server_name: "dns.google", socket_addr: std::net::SocketAddrV4::new(std::net::Ipv4Addr::new(8, 8, 8, 8), 853) },
-   UpstreamDnsServer { server_name: "dns.google", socket_addr: std::net::SocketAddrV4::new(std::net::Ipv4Addr::new(8, 8, 4, 4), 853) },
-   UpstreamDnsServer { server_name: "dns.quad9.net", socket_addr: std::net::SocketAddrV4::new(std::net::Ipv4Addr::new(9, 9, 9, 9), 853) },
-];
+static mut STATS: once_cell::sync::Lazy<[crate::stats::Stats; crate::statics::UPSTREAM_DNS_SERVERS.len()]> =
+   once_cell::sync::Lazy::new(crate::stats::init_stats);
 
 struct QuestionCache {
    pub asked_timestamp: u128,
@@ -67,9 +53,9 @@ pub async fn go(port: u16) {
       let listener_addr = std::net::SocketAddrV4::new(std::net::Ipv4Addr::UNSPECIFIED, port);
       let listener_socket = std::sync::Arc::new(tokio::net::UdpSocket::bind(listener_addr).await.unwrap());
 
-      let mut tx_channels = Vec::with_capacity(UPSTREAM_DNS_SERVERS.len());
+      let mut tx_channels = Vec::with_capacity(crate::statics::UPSTREAM_DNS_SERVERS.len());
 
-      for dns in &UPSTREAM_DNS_SERVERS {
+      for dns in &crate::statics::UPSTREAM_DNS_SERVERS {
          let (tx, rx) = tokio::sync::mpsc::channel(8192);
          tokio::task::spawn(upstream_tls_handler(rx, dns, listener_socket.clone()));
          tx_channels.push(tx);
@@ -136,13 +122,6 @@ pub async fn go(port: u16) {
             BUF_ID_ROUTER.lock().await.insert(id, client_addr);
          }
 
-         {
-            // Increment 'leak detector'
-            unsafe {
-               INFLIGHT_COUNTER += 1;
-            }
-         }
-
          // Write both bytes at once after converting to Big Endian
          unsafe { *(query_buf.as_mut_ptr() as *mut u16) = (read_bytes as u16).to_be() };
          for tx in &tx_channels {
@@ -159,7 +138,7 @@ pub async fn go(port: u16) {
 
 pub async fn upstream_tls_handler(
    mut msg_rx: tokio::sync::mpsc::Receiver<Vec<u8>>,
-   upstream_dns: &UpstreamDnsServer,
+   upstream_dns: &crate::statics::UpstreamDnsServer,
    listener_addr: std::sync::Arc<tokio::net::UdpSocket>,
 ) {
    let tls_client_config = crate::tls::get_tls_client_config();
@@ -250,16 +229,6 @@ pub async fn upstream_tls_handler(
                         panic!("Wrote nothing to client after receiving data from upstream")
                      }
 
-                     {
-                        // Decrement 'leak detector'
-                        unsafe {
-                           INFLIGHT_COUNTER -= 1;
-                           if INFLIGHT_COUNTER > 8 {
-                              println!("| Possibly lost queries: {}", INFLIGHT_COUNTER);
-                           }
-                        }
-                     }
-
                      let elapsed_ms = get_unix_ts_millis() - DNS_QUESTION_CACHE.lock().await.get(cache_key).unwrap().asked_timestamp;
 
                      cache_guard.insert(cache_key.to_vec(), AnswerCache { answer: udp_segment_no_tcp_prefix.to_vec(), elapsed_ms, ttl: 0 });
@@ -269,7 +238,7 @@ pub async fn upstream_tls_handler(
                            let debug_query =
                               crate::dns::get_question_as_string(udp_segment_no_tcp_prefix.as_ptr(), udp_segment_no_tcp_prefix.len());
                            let fastest_count = crate::stats::Stats::array_increment_fastest(
-                              &mut STATS,
+                              STATS.as_mut(),
                               format!("{}", upstream_dns.socket_addr.ip()).as_str(),
                            );
                            println!(
@@ -291,19 +260,13 @@ pub async fn upstream_tls_handler(
                break;
             }
          }
-
-         // {
-         //    let elapsed_ms = crate::time::get_elapsed_ms(&crate::time::get_timespec(), &start_time);
-         //    let debug_query = crate::dns::get_question_as_string(udp_segment.as_ptr(), udp_segment_len);
-         //    println!("{:>4}ms -> {} ({})", elapsed_ms, debug_query, upstream_dns.socket_addr.ip());
-         // }
       }
    }
 }
 
 async fn connect(
    tls_connector: &tokio_rustls::TlsConnector,
-   upstream_dns: &UpstreamDnsServer,
+   upstream_dns: &crate::statics::UpstreamDnsServer,
 ) -> tokio_rustls::client::TlsStream<tokio::net::TcpStream> {
    fn is_power_of_2(num: i32) -> bool {
       num & (num - 1) == 0
@@ -311,12 +274,6 @@ async fn connect(
 
    let mut connection_failures = 0;
    let mut tls_failures = 0;
-
-   // let mut tls_conn = {
-   //    let upstream_dns_address: rustls::ServerName = upstream_server.server_name.try_into().unwrap();
-   //    let arc_config = std::sync::Arc::new(tls_client_config.clone());
-   //    rustls::ClientConnection::new(arc_config, upstream_dns_address).unwrap()
-   // };
 
    loop {
       let tcp_stream = match tokio::net::TcpStream::connect(upstream_dns.socket_addr).await {
