@@ -16,6 +16,11 @@ You should have received a copy of the GNU Affero General Public License
 along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
+/// Gets duration since UNIX_EPOCH in milliseconds
+pub fn get_unix_ts_millis() -> u128 {
+   std::time::SystemTime::now().duration_since(std::time::SystemTime::UNIX_EPOCH).unwrap().as_millis()
+}
+
 /// Converts str of an IP address representing an internet host to a 32-bit int which represents
 /// also represents the same IP address which is in network byte order
 ///
