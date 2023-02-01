@@ -20,20 +20,21 @@ use hashbrown::HashMap;
 
 pub struct TlsConnectionWrapper {
    pub fd: isize,
-   pub tls_conn: rustls::ClientConnection,
+   pub tls_conn: tokio_rustls::rustls::ClientConnection,
    pub sock: std::net::TcpStream,
 }
 
 #[inline]
-pub fn get_tls_client_config() -> rustls::ClientConfig {
-   let mut root_store = rustls::RootCertStore { roots: Vec::new() };
+pub fn get_tls_client_config() -> tokio_rustls::rustls::ClientConfig {
+   let mut root_store = tokio_rustls::rustls::RootCertStore { roots: Vec::new() };
    root_store.roots.extend(
       webpki_roots::TLS_SERVER_ROOTS
          .0
          .iter()
-         .map(|ta| rustls::OwnedTrustAnchor::from_subject_spki_name_constraints(ta.subject, ta.spki, ta.name_constraints)),
+         .map(|ta| tokio_rustls::rustls::OwnedTrustAnchor::from_subject_spki_name_constraints(ta.subject, ta.spki, ta.name_constraints)),
    );
-   let mut config = rustls::ClientConfig::builder().with_safe_defaults().with_root_certificates(root_store.clone()).with_no_client_auth();
+   let mut config =
+      tokio_rustls::rustls::ClientConfig::builder().with_safe_defaults().with_root_certificates(root_store.clone()).with_no_client_auth();
    config.session_storage = std::sync::Arc::new(PersistCache::new());
    config.enable_early_data = true;
 
@@ -50,7 +51,7 @@ impl PersistCache {
    }
 }
 
-impl rustls::client::StoresClientSessions for PersistCache {
+impl tokio_rustls::rustls::client::StoresClientSessions for PersistCache {
    fn put(&self, key: Vec<u8>, value: Vec<u8>) -> bool {
       self.cache.lock().unwrap().insert(key, value);
       true

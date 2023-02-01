@@ -98,7 +98,7 @@ pub async fn go(port: u16) {
 
             let mut cache_guard = DNS_QUESTION_CACHE.lock().await;
             if !cache_guard.contains_key(cache_key) {
-               cache_guard.insert(cache_key.to_vec(), QuestionCache { asked_timestamp: get_unix_timestamp() });
+               cache_guard.insert(cache_key.to_vec(), QuestionCache { asked_timestamp: get_unix_ts_millis() });
             }
          }
 
@@ -260,7 +260,7 @@ pub async fn upstream_tls_handler(
                         }
                      }
 
-                     let elapsed_ms = get_unix_timestamp() - DNS_QUESTION_CACHE.lock().await.get(cache_key).unwrap().asked_timestamp;
+                     let elapsed_ms = get_unix_ts_millis() - DNS_QUESTION_CACHE.lock().await.get(cache_key).unwrap().asked_timestamp;
 
                      cache_guard.insert(cache_key.to_vec(), AnswerCache { answer: udp_segment_no_tcp_prefix.to_vec(), elapsed_ms, ttl: 0 });
 
@@ -335,23 +335,24 @@ async fn connect(
       let _ = tcp_stream.set_linger(None);
       let _ = tcp_stream.set_nodelay(true);
 
-      let tls_stream = match tls_connector.connect(rustls::ServerName::try_from(upstream_dns.server_name).unwrap(), tcp_stream).await {
-         Ok(stream) => stream,
-         Err(err) => {
-            println!("{err}");
-            tls_failures += 1;
-            if is_power_of_2(tls_failures) {
-               println!("failed {}x times establishing tls connection to: {}", tls_failures, upstream_dns.socket_addr);
+      let tls_stream =
+         match tls_connector.connect(tokio_rustls::rustls::ServerName::try_from(upstream_dns.server_name).unwrap(), tcp_stream).await {
+            Ok(stream) => stream,
+            Err(err) => {
+               println!("{err}");
+               tls_failures += 1;
+               if is_power_of_2(tls_failures) {
+                  println!("failed {}x times establishing tls connection to: {}", tls_failures, upstream_dns.socket_addr);
+               }
+               tokio::time::sleep(tokio::time::Duration::from_millis(CONN_ERROR_SLEEP_MS)).await;
+               continue;
             }
-            tokio::time::sleep(tokio::time::Duration::from_millis(CONN_ERROR_SLEEP_MS)).await;
-            continue;
-         }
-      };
+         };
 
       break tls_stream;
    }
 }
 
-fn get_unix_timestamp() -> u128 {
+fn get_unix_ts_millis() -> u128 {
    std::time::SystemTime::now().duration_since(std::time::SystemTime::UNIX_EPOCH).unwrap().as_millis()
 }

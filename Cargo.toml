@@ -32,15 +32,9 @@ default = []
 # FFI bindings to better allocator designed by Microsoft
 mimalloc = { version = "*", default-features = false }
 
-# command line parser
 clap = { version = "*", default-features = true, features = ["derive"] }
-
-
-#dnsparse = "*"
 lazy_static = "*"
 once_cell = "*"
-#dns-parser = "*"
-rustls = "*"
 webpki-roots = "*"
 hashbrown = { version = "*", default-features = true, features = ["inline-more", "ahash"] }
 
@@ -48,4 +42,3 @@ hashbrown = { version = "*", default-features = true, features = ["inline-more",
 tokio = { version = "*", features = ["rt-multi-thread", "net", "io-util", "time", "macros", "parking_lot", "sync"] }
 tokio-rustls = "*"
 
-#crossbeam = "*"
