@@ -21,8 +21,6 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 pub static mut ARGS: crate::args::Args = unsafe { core::mem::MaybeUninit::zeroed().assume_init() };
 
-pub static SELF_CHECKSUM: once_cell::sync::Lazy<Option<u64>> = once_cell::sync::Lazy::new(|| Some(crate::util::self_checksum().unwrap().0));
-
 // faf spawns one thread per core, meaning each thread can handle 1024 connections.
 // If we don't UNSHARE, then we can only handle 'n' total connections across all threads (instead of 'each')
 pub const MAX_CONN: usize = 64;

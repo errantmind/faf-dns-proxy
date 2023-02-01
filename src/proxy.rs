@@ -18,16 +18,16 @@ pub const UPSTREAM_DNS_SERVERS: [UpstreamDnsServer; 5] = [
 ];
 
 struct QuestionCache {
-   pub asked_timestamp: crate::time::timespec,
+   pub asked_timestamp: u128,
 }
 
 struct AnswerCache {
    pub answer: Vec<u8>,
-   pub elapsed_ms: i64,
+   pub elapsed_ms: u128,
    pub ttl: u64,
 }
 
-pub const CONN_ERROR_SLEEP_TIME: u64 = 2000;
+pub const CONN_ERROR_SLEEP_MS: u64 = 1000;
 
 lazy_static::lazy_static! {
    static ref DNS_QUESTION_CACHE: tokio::sync::Mutex<HashMap<Vec<u8>, QuestionCache>> =
@@ -72,7 +72,7 @@ pub async fn go(port: u16) {
          assert!(read_bytes <= 512, "Received a datagram with > 512 bytes on the listening socket");
          let udp_segment = &query_buf[2..read_bytes + 2];
 
-         let id = crate::dns::get_id_big_endian(udp_segment.as_ptr(), udp_segment.len());
+         let id = crate::dns::get_id(udp_segment.as_ptr(), udp_segment.len());
          let cache_key = crate::dns::get_query_unique_id(udp_segment.as_ptr(), udp_segment.len());
 
          {
@@ -80,7 +80,7 @@ pub async fn go(port: u16) {
 
             let mut cache_guard = DNS_QUESTION_CACHE.lock().await;
             if !cache_guard.contains_key(cache_key) {
-               cache_guard.insert(cache_key.to_vec(), QuestionCache { asked_timestamp: crate::time::get_timespec() });
+               cache_guard.insert(cache_key.to_vec(), QuestionCache { asked_timestamp: get_unix_timestamp() });
             }
          }
 
@@ -219,7 +219,7 @@ pub async fn upstream_tls_handler(
             // Scope for guards
             {
                {
-                  let id = crate::dns::get_id_big_endian(udp_segment_no_tcp_prefix.as_ptr(), udp_segment_no_tcp_prefix.len());
+                  let id = crate::dns::get_id(udp_segment_no_tcp_prefix.as_ptr(), udp_segment_no_tcp_prefix.len());
                   let cache_key = crate::dns::get_query_unique_id(udp_segment_no_tcp_prefix.as_ptr(), udp_segment_no_tcp_prefix.len());
                   let mut cache_guard = DNS_ANSWER_CACHE.lock().await;
                   if !cache_guard.contains_key(cache_key) {
@@ -242,10 +242,7 @@ pub async fn upstream_tls_handler(
                         }
                      }
 
-                     let elapsed_ms = crate::time::get_elapsed_ms(
-                        &crate::time::get_timespec(),
-                        &DNS_QUESTION_CACHE.lock().await.get(cache_key).unwrap().asked_timestamp,
-                     );
+                     let elapsed_ms = get_unix_timestamp() - DNS_QUESTION_CACHE.lock().await.get(cache_key).unwrap().asked_timestamp;
 
                      cache_guard.insert(cache_key.to_vec(), AnswerCache { answer: udp_segment_no_tcp_prefix.to_vec(), elapsed_ms, ttl: 0 });
 
@@ -312,7 +309,7 @@ async fn connect(
             if is_power_of_2(connection_failures) {
                println!("failed {}x times connecting to: {}", connection_failures, upstream_dns.socket_addr);
             }
-            tokio::time::sleep(tokio::time::Duration::from_millis(CONN_ERROR_SLEEP_TIME)).await;
+            tokio::time::sleep(tokio::time::Duration::from_millis(CONN_ERROR_SLEEP_MS)).await;
             continue;
          }
       };
@@ -328,11 +325,15 @@ async fn connect(
             if is_power_of_2(tls_failures) {
                println!("failed {}x times establishing tls connection to: {}", tls_failures, upstream_dns.socket_addr);
             }
-            tokio::time::sleep(tokio::time::Duration::from_millis(CONN_ERROR_SLEEP_TIME)).await;
+            tokio::time::sleep(tokio::time::Duration::from_millis(CONN_ERROR_SLEEP_MS)).await;
             continue;
          }
       };
 
       break tls_stream;
    }
+}
+
+fn get_unix_timestamp() -> u128 {
+   std::time::SystemTime::now().duration_since(std::time::SystemTime::UNIX_EPOCH).unwrap().as_millis()
 }

@@ -16,42 +16,6 @@ You should have received a copy of the GNU Affero General Public License
 along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
-const DOT: u8 = b'.';
-
-/// Attempt to set a higher process priority. -20 is the highest we can set on most distros.
-#[inline]
-pub fn set_maximum_process_priority() {
-   faf_syscall::sys_call!(crate::const_sys::SYS_SETPRIORITY as isize, crate::const_sys::PRIO_PROCESS as isize, 0, -20);
-}
-
-/// Unshare the file descriptor table between threads to keep the fd number itself low, otherwise all
-/// threads will share the same file descriptor table. A single file descriptor table is problematic if
-/// we use file descriptors to index data structures
-#[inline]
-pub fn unshare_file_descriptors() {
-   faf_syscall::sys_call!(crate::const_sys::SYS_UNSHARE as isize, crate::const_sys::CLONE_FILES as isize);
-}
-
-/// Uses xxhash to hash a byte slice
-#[inline(always)]
-pub fn hash64(bytes: &[u8]) -> u64 {
-   use xxhash_rust::xxh3::xxh3_64;
-   xxh3_64(bytes)
-}
-
-// Returns the checksum and the file size
-#[inline(always)]
-pub fn self_checksum() -> Option<(u64, usize)> {
-   use std::io::Read;
-
-   let current_exe = std::env::current_exe().unwrap();
-   let mut f = std::fs::File::open(current_exe).ok()?;
-   let file_len = f.metadata().ok()?.len();
-   let mut bytes = Vec::with_capacity(file_len as usize + 1);
-   f.read_to_end(&mut bytes).ok()?;
-   Some((hash64(&bytes), bytes.len()))
-}
-
 
 /// Converts str of an IP address representing an internet host to a 32-bit int which represents
 /// also represents the same IP address which is in network byte order
@@ -79,7 +43,7 @@ pub unsafe fn inet4_aton(in_buff_start: *const u8, len: usize) -> u32 {
    let in_buff_end = in_buff_start.add(len);
    let mut input_byte_walker = in_buff_start;
    loop {
-      if *input_byte_walker == DOT || input_byte_walker == in_buff_end {
+      if *input_byte_walker == b'.' || input_byte_walker == in_buff_end {
          *s_addr_ptr = output;
          s_addr_ptr = s_addr_ptr.add(1);
          output = 0;

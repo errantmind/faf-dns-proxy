@@ -35,7 +35,7 @@ mimalloc = { version = "*", default-features = false }
 # command line parser
 clap = { version = "*", default-features = true, features = ["derive"] }
 
-faf-syscall = "*"
+
 #dnsparse = "*"
 lazy_static = "*"
 once_cell = "*"
@@ -43,7 +43,6 @@ once_cell = "*"
 rustls = "*"
 webpki-roots = "*"
 hashbrown = { version = "*", default-features = true, features = ["inline-more", "ahash"] }
-xxhash-rust = { version = "*", default-features = false, features = ["xxh3"] }
 
 # async runtime/executor
 tokio = { version = "*", features = ["rt-multi-thread", "net", "io-util", "time", "macros", "parking_lot", "sync"] }

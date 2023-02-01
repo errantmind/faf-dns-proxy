@@ -20,16 +20,12 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #![feature(const_size_of_val, const_maybe_uninit_zeroed, core_intrinsics, const_mut_refs, const_for, inline_const, const_socketaddr)]
 
 mod args;
-mod const_sys;
 mod dns;
 mod proxy;
 mod statics;
-mod time;
 mod tls;
 mod util;
-mod net;
 mod stats;
-
 
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
@@ -48,7 +44,6 @@ pub fn main() {
       print_version();
    }
 
-   util::set_maximum_process_priority();
    tokio::runtime::Runtime::new().unwrap().block_on(proxy::go(53));
 }
 
@@ -69,9 +64,8 @@ fn print_banner() {
 
 fn print_version() {
    println!(
-      "{} v{} | checksum: {} | author: errantmind@protonmail.com\n",
+      "{} v{} | author: errantmind@protonmail.com\n",
       statics::PROJECT_NAME,
       statics::VERSION,
-      statics::SELF_CHECKSUM.unwrap()
    );
 }

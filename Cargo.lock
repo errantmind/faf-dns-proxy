@@ -112,7 +112,6 @@ name = "faf-dns-proxy"
 version = "0.4.0"
 dependencies = [
  "clap",
- "faf-syscall",
  "hashbrown",
  "lazy_static",
  "mimalloc",
@@ -121,14 +120,7 @@ dependencies = [
  "tokio",
  "tokio-rustls",
  "webpki-roots",
- "xxhash-rust",
 ]
-
-[[package]]
-name = "faf-syscall"
-version = "3.0.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "60d326b3ace402d4471ca530837ed8cc887bec20f65da62f198ecfa637f71492"
 
 [[package]]
 name = "hashbrown"
@@ -701,9 +693,3 @@ name = "windows_x86_64_msvc"
 version = "0.42.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "447660ad36a13288b1db4d4248e857b510e8c3a225c822ba4fb748c0aafecffd"
-
-[[package]]
-name = "xxhash-rust"
-version = "0.8.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "735a71d46c4d68d71d4b24d03fdc2b98e38cea81730595801db779c04fe80d70"
