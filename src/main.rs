@@ -1,5 +1,5 @@
 /*
-FaF is a cutting edge, high performance dns proxy
+FaF is a high performance DNS over TLS proxy
 Copyright (C) 2021  James Bates
 
 This program is free software: you can redistribute it and/or modify
@@ -23,9 +23,9 @@ mod args;
 mod dns;
 mod proxy;
 mod statics;
+mod stats;
 mod tls;
 mod util;
-mod stats;
 
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
@@ -63,9 +63,5 @@ fn print_banner() {
 }
 
 fn print_version() {
-   println!(
-      "{} v{} | author: errantmind@protonmail.com\n",
-      statics::PROJECT_NAME,
-      statics::VERSION,
-   );
+   println!("{} v{} | author: errantmind@protonmail.com\n", statics::PROJECT_NAME, statics::VERSION,);
 }

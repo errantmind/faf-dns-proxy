@@ -1,5 +1,5 @@
 /*
-FaF is a cutting edge, high performance dns proxy
+FaF is a high performance DNS over TLS proxy
 Copyright (C) 2021  James Bates
 
 This program is free software: you can redistribute it and/or modify
@@ -20,13 +20,13 @@ use crate::statics::*;
 
 pub struct Stats {
    pub dns_ip: &'static str,
-   pub fastest_count: usize
+   pub fastest_count: usize,
 }
 
 impl Stats {
    const fn increment_fastest(&mut self) {
       self.fastest_count += 1;
-   }   
+   }
 
    pub fn array_increment_fastest(stat_array: &mut [Self], dns_ip_key: &str) -> usize {
       for stats in stat_array {
@@ -37,7 +37,7 @@ impl Stats {
       }
 
       0
-   }   
+   }
 }
 
 impl std::fmt::Display for Stats {
