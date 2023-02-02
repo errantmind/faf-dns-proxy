@@ -22,16 +22,16 @@ static mut STATS: once_cell::sync::Lazy<[crate::stats::Stats; crate::statics::UP
    once_cell::sync::Lazy::new(crate::stats::init_stats);
 
 struct QuestionCache {
-   pub asked_timestamp: u128,
+   asked_timestamp: u128,
 }
 
 struct AnswerCache {
-   pub answer: Vec<u8>,
-   pub elapsed_ms: u128,
-   pub ttl: u64,
+   answer: Vec<u8>,
+   _elapsed_ms: u128,
+   _ttl: u64,
 }
 
-pub const CONN_ERROR_SLEEP_MS: u64 = 1000;
+const CONN_ERROR_SLEEP_MS: u64 = 1000;
 
 lazy_static::lazy_static! {
    static ref DNS_QUESTION_CACHE: tokio::sync::Mutex<HashMap<Vec<u8>, QuestionCache>> =
@@ -108,7 +108,7 @@ pub async fn go(port: u16) {
 
                   cache_hits += 1;
                   if cache_hits >= cache_hits_print_threshold {
-                     println!("cache hits: {}", cache_hits_print_threshold);
+                     println!("cache hits: {cache_hits_print_threshold}");
                      cache_hits_print_threshold <<= 1;
                   }
                }
@@ -203,12 +203,12 @@ pub async fn upstream_tls_handler(
          let mut offset = 0;
          loop {
             let udp_segment_len = crate::dns::get_tcp_dns_size_prefix_le(&response_buf[offset..]);
-            assert!(udp_segment_len > 0 && udp_segment_len <= 512, "Tcp reported len is invalid ({})", udp_segment_len);
+            if !udp_segment_len > 0 && !udp_segment_len <= 512 {
+               panic!("Tcp reported len is invalid ({udp_segment_len})");
+            };
             assert!(
                udp_segment_len <= (read_bytes_tcp - 2),
-               "Udp segment length cannot be larger than the TCP wrapper ({}/{})",
-               udp_segment_len,
-               read_bytes_tcp
+               "Udp segment length cannot be larger than the TCP wrapper ({udp_segment_len}/{read_bytes_tcp})"
             );
 
             let udp_segment_no_tcp_prefix = &response_buf[offset + 2..offset + udp_segment_len + 2];
@@ -232,7 +232,10 @@ pub async fn upstream_tls_handler(
                      let elapsed_ms =
                         crate::util::get_unix_ts_millis() - DNS_QUESTION_CACHE.lock().await.get(cache_key).unwrap().asked_timestamp;
 
-                     cache_guard.insert(cache_key.to_vec(), AnswerCache { answer: udp_segment_no_tcp_prefix.to_vec(), elapsed_ms, ttl: 0 });
+                     cache_guard.insert(
+                        cache_key.to_vec(),
+                        AnswerCache { answer: udp_segment_no_tcp_prefix.to_vec(), _elapsed_ms: elapsed_ms, _ttl: 0 },
+                     );
 
                      unsafe {
                         if !crate::statics::ARGS.daemon {

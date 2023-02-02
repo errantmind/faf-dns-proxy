@@ -16,8 +16,8 @@ You should have received a copy of the GNU Affero General Public License
 along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
-#![allow(clippy::missing_safety_doc, clippy::uninit_assumed_init, dead_code)]
-#![feature(const_size_of_val, const_maybe_uninit_zeroed, core_intrinsics, const_mut_refs, const_for, inline_const, const_socketaddr)]
+#![allow(clippy::missing_safety_doc, clippy::uninit_assumed_init)]
+#![feature(const_maybe_uninit_zeroed)]
 
 mod args;
 mod dns;
@@ -31,17 +31,18 @@ mod util;
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 pub fn main() {
-   let args = {
+   {
       // Init args
 
       use clap::Parser;
       unsafe { statics::ARGS = args::Args::parse() };
-      args::Args::parse()
    };
 
-   if !args.daemon {
-      print_banner();
-      print_version();
+   unsafe {
+      if !statics::ARGS.daemon {
+         print_banner();
+         print_version();
+      }
    }
 
    tokio::runtime::Runtime::new().unwrap().block_on(proxy::go(53));

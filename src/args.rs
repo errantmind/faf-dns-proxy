@@ -19,7 +19,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 use clap::Parser;
 
 /// FaF DNS Proxy - Faster DNS Resolution
-#[derive(Parser, Debug)]
+#[derive(Parser, Debug, Default)]
 #[clap(author, version, about, long_about = None)]
 pub struct Args {
    /// [optional] daemon mode, no logging output

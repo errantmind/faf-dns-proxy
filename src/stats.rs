@@ -24,7 +24,7 @@ pub struct Stats {
 }
 
 impl Stats {
-   const fn increment_fastest(&mut self) {
+   fn increment_fastest(&mut self) {
       self.fastest_count += 1;
    }
 

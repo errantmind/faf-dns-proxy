@@ -32,9 +32,8 @@ pub fn set_id_big_endian(new_id: u16, input: &mut [u8]) {
 pub fn get_tcp_dns_size_prefix_le(input: &[u8]) -> usize {
    debug_assert!(input.len() >= 2);
    let size_be = unsafe { *(input as *const _ as *const u16) };
-   core::intrinsics::bswap(size_be) as usize
+   u16::swap_bytes(size_be) as usize
 }
-
 
 /// Walks one question in the query (QNAME, QTYPE, QCLASS) and returns these bytes a slice of the buffer
 #[inline]
@@ -114,5 +113,3 @@ pub fn get_question_as_string(dns_buf_start: *const u8, len: usize) -> String {
 
    question_str
 }
-
-

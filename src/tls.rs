@@ -18,12 +18,6 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 use hashbrown::HashMap;
 
-pub struct TlsConnectionWrapper {
-   pub fd: isize,
-   pub tls_conn: tokio_rustls::rustls::ClientConnection,
-   pub sock: std::net::TcpStream,
-}
-
 #[inline]
 pub fn get_tls_client_config() -> tokio_rustls::rustls::ClientConfig {
    let mut root_store = tokio_rustls::rustls::RootCertStore { roots: Vec::new() };

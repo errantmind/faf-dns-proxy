@@ -109,7 +109,7 @@ dependencies = [
 
 [[package]]
 name = "faf-dns-proxy"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "clap",
  "hashbrown",
