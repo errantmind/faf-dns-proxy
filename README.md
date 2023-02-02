@@ -1,5 +1,7 @@
 # FaF DNS Proxy
 
+WIP, do not use this yet. It is functional but I'm still working on the features.
+
 `FaF DNS Proxy` is a Linux (only) DoT proxy / forwarder written in Rust. It follows the design philosophy of the [FaF Web Server](https://www.github.com/errantmind/faf).
 
 This is an experimental project and not 'production-ready', although I do use it on my own machines. I am working to clean up the code for easier comprehension and to add the last few remaining features.

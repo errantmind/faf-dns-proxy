@@ -229,7 +229,8 @@ pub async fn upstream_tls_handler(
                         panic!("Wrote nothing to client after receiving data from upstream")
                      }
 
-                     let elapsed_ms = crate::util::get_unix_ts_millis() - DNS_QUESTION_CACHE.lock().await.get(cache_key).unwrap().asked_timestamp;
+                     let elapsed_ms =
+                        crate::util::get_unix_ts_millis() - DNS_QUESTION_CACHE.lock().await.get(cache_key).unwrap().asked_timestamp;
 
                      cache_guard.insert(cache_key.to_vec(), AnswerCache { answer: udp_segment_no_tcp_prefix.to_vec(), elapsed_ms, ttl: 0 });
 
@@ -309,4 +310,3 @@ async fn connect(
       break tls_stream;
    }
 }
-
