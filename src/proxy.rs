@@ -80,15 +80,6 @@ pub async fn go(port: u16) {
          let cache_key = crate::dns::get_query_unique_id(udp_segment.as_ptr(), udp_segment.len());
 
          {
-            // Add to QUESTION cache (only once)
-
-            let mut question_cache_guard = DNS_QUESTION_CACHE.lock().await;
-            if !question_cache_guard.contains_key(cache_key) {
-               question_cache_guard.insert(cache_key.to_vec(), QuestionCache { asked_at: crate::util::get_unix_ts_millis() });
-            }
-         }
-
-         {
             // Scope for cache guard.
             // First check the ANSWER cache and respond immediately if we already have an answer to the query
 
@@ -115,6 +106,13 @@ pub async fn go(port: u16) {
                } else {
                   answer_cache_guard.remove_entry(cache_key);
                   DNS_QUESTION_CACHE.lock().await.insert(cache_key.to_vec(), QuestionCache { asked_at: crate::util::get_unix_ts_millis() });
+               }
+            } else {
+               // Add to QUESTION cache
+
+               let mut question_cache_guard = DNS_QUESTION_CACHE.lock().await;
+               if !question_cache_guard.contains_key(cache_key) {
+                  question_cache_guard.insert(cache_key.to_vec(), QuestionCache { asked_at: crate::util::get_unix_ts_millis() });
                }
             }
          }
