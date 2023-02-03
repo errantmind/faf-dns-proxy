@@ -1,6 +1,6 @@
 /*
 FaF is a high performance DNS over TLS proxy
-Copyright (C) 2021  James Bates
+Copyright (C) 2022  James Bates
 
 This program is free software: you can redistribute it and/or modify
 it under the terms of the GNU Affero General Public License as published by
@@ -15,6 +15,8 @@ GNU Affero General Public License for more details.
 You should have received a copy of the GNU Affero General Public License
 along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
+
+// DNS packet structure reference: https://mislove.org/teaching/cs4700/spring11/handouts/project1-primer.pdf
 
 #[inline]
 pub fn get_id(dns_buf_start: *const u8, len: usize) -> u16 {
@@ -70,13 +72,21 @@ pub fn get_query_unique_id<'a>(dns_buf_start: *const u8, len: usize) -> &'a [u8]
 }
 
 #[inline]
-pub fn get_question_as_string(dns_buf_start: *const u8, len: usize) -> String {
+pub fn get_question_as_string_and_lowest_ttl(dns_buf_start: *const u8, len: usize) -> (String, u64) {
    let mut question_str = String::new();
+   let mut ttl: u32 = u32::MAX;
    unsafe {
-      // Skip the header
       const QNAME_TERMINATOR: u8 = 0;
-      let mut dns_qname_qtype_qclass_walker = dns_buf_start.add(12);
       let dns_buf_end = dns_buf_start.add(len);
+
+      // Get the number of answers
+      let mut dns_qname_qtype_qclass_walker = dns_buf_start.add(6);
+      debug_assert!(dns_qname_qtype_qclass_walker.add(2) <= dns_buf_end);
+      let num_answers = u16::swap_bytes(*(dns_qname_qtype_qclass_walker as *const _ as *const u16));
+
+      // Skip the header
+      dns_qname_qtype_qclass_walker = dns_qname_qtype_qclass_walker.add(6);
+
       while *dns_qname_qtype_qclass_walker != QNAME_TERMINATOR && dns_qname_qtype_qclass_walker != dns_buf_end {
          let segment_len = *dns_qname_qtype_qclass_walker as usize;
          if !question_str.is_empty() {
@@ -87,11 +97,46 @@ pub fn get_question_as_string(dns_buf_start: *const u8, len: usize) -> String {
          dns_qname_qtype_qclass_walker = dns_qname_qtype_qclass_walker.add(1 + segment_len);
       }
 
+      // Skip Question section's QNAME TERMINATOR + QTYPE + QCLASS
+      dns_qname_qtype_qclass_walker = dns_qname_qtype_qclass_walker.add(5);
+
+      // Parse TTL from answers.
+      // This is where it gets tricky due to the compression scheme used. It can use pointers (offsets) but doesn't have to.
+      // We will also be tricky to do the minimum amout of parsing.
+      // To grok, please refer to the reference mentioned towards the top of this file.
+
+      for i in 0..num_answers {
+         if i > 0 {
+            // If there is only a single answer, we don't want to do the work of getting to the next TTL.
+            // Similarly, if this is the last answer, we don't want to do redundant work for getting to the next entry.
+            // So, by putting this logic first, we avoid both.
+
+            // Skips past the previous TTL
+            dns_qname_qtype_qclass_walker = dns_qname_qtype_qclass_walker.add(4);
+
+            // Skips RDATA section
+            let size_be = *(dns_qname_qtype_qclass_walker as *const _ as *const u16);
+            let rdlength = u16::swap_bytes(size_be);
+            dns_qname_qtype_qclass_walker = dns_qname_qtype_qclass_walker.add(2 + rdlength as usize);
+         }
+
+         let first_byte = *dns_qname_qtype_qclass_walker;
+         if first_byte >= 192 {
+            // A pointer has been specified so skip the 2 byte section (pointer specified and offset), the TYPE and CLASS
+            dns_qname_qtype_qclass_walker = dns_qname_qtype_qclass_walker.add(6);
+         } else {
+            panic!("parse malfunction for {question_str}");
+         }
+
+         let size_be = *(dns_qname_qtype_qclass_walker as *const _ as *const u32);
+         let latest_ttl = u32::swap_bytes(size_be);
+         if latest_ttl < ttl {
+            ttl = latest_ttl;
+         }
+      }
+
       {
          // Include the entire query (.. + QTYPE + QCLASS)
-
-         // // Skip adding terminator
-         // dns_qname_qtype_qclass_walker = dns_qname_qtype_qclass_walker.add(1);
 
          // let mut buf: [u8; 3] = core::mem::zeroed();
          // let qtype_first_byte_len = crate::u64toa::u8toa(buf.as_mut_ptr(), *dns_qname_qtype_qclass_walker);
@@ -111,5 +156,5 @@ pub fn get_question_as_string(dns_buf_start: *const u8, len: usize) -> String {
       }
    }
 
-   question_str
+   (question_str, ttl as u64)
 }

@@ -1,6 +1,6 @@
 /*
 FaF is a high performance DNS over TLS proxy
-Copyright (C) 2021  James Bates
+Copyright (C) 2022  James Bates
 
 This program is free software: you can redistribute it and/or modify
 it under the terms of the GNU Affero General Public License as published by
@@ -17,6 +17,13 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
 /// Gets duration since UNIX_EPOCH in milliseconds
+#[inline]
 pub fn get_unix_ts_millis() -> u128 {
    std::time::SystemTime::now().duration_since(std::time::SystemTime::UNIX_EPOCH).unwrap().as_millis()
+}
+
+/// Gets duration since UNIX_EPOCH in seconds
+#[inline]
+pub fn get_unix_ts_secs() -> u64 {
+   std::time::SystemTime::now().duration_since(std::time::SystemTime::UNIX_EPOCH).unwrap().as_secs()
 }

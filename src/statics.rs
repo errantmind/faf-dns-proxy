@@ -1,6 +1,6 @@
 /*
 FaF is a high performance DNS over TLS proxy
-Copyright (C) 2021  James Bates
+Copyright (C) 2022  James Bates
 
 This program is free software: you can redistribute it and/or modify
 it under the terms of the GNU Affero General Public License as published by
@@ -33,3 +33,5 @@ pub const UPSTREAM_DNS_SERVERS: [UpstreamDnsServer; 5] = [
    UpstreamDnsServer { server_name: "dns.google", socket_addr: std::net::SocketAddrV4::new(std::net::Ipv4Addr::new(8, 8, 4, 4), 853) },
    UpstreamDnsServer { server_name: "dns.quad9.net", socket_addr: std::net::SocketAddrV4::new(std::net::Ipv4Addr::new(9, 9, 9, 9), 853) },
 ];
+
+pub const MINIMUM_TTL_OVERRIDE: u64 = 300;

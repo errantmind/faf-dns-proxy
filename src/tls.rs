@@ -1,6 +1,6 @@
 /*
 FaF is a high performance DNS over TLS proxy
-Copyright (C) 2021  James Bates
+Copyright (C) 2022  James Bates
 
 This program is free software: you can redistribute it and/or modify
 it under the terms of the GNU Affero General Public License as published by

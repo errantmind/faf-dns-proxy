@@ -1,6 +1,6 @@
 /*
 FaF is a high performance DNS over TLS proxy
-Copyright (C) 2021  James Bates
+Copyright (C) 2022  James Bates
 
 This program is free software: you can redistribute it and/or modify
 it under the terms of the GNU Affero General Public License as published by
@@ -28,7 +28,7 @@ struct QuestionCache {
 struct AnswerCache {
    answer: Vec<u8>,
    _elapsed_ms: u128,
-   _ttl: u64,
+   expires_at: u64,
 }
 
 const CONN_ERROR_SLEEP_MS: u64 = 1000;
@@ -96,24 +96,25 @@ pub async fn go(port: u16) {
             let cached_response_maybe = cache_guard.get_mut(cache_key);
 
             if let Some(cached_response) = cached_response_maybe {
-               crate::dns::set_id_big_endian(id, &mut cached_response.answer);
-               let wrote = listener_socket.send_to(&cached_response.answer, &client_addr).await.unwrap();
+               if cached_response.expires_at > crate::util::get_unix_ts_secs() {
+                  crate::dns::set_id_big_endian(id, &mut cached_response.answer);
+                  let wrote = listener_socket.send_to(&cached_response.answer, &client_addr).await.unwrap();
+                  assert!(wrote != 0, "Wrote nothing to client after fetching data from cache");
 
-               if wrote == 0 {
-                  panic!("Wrote nothing to client after fetching data from cache")
-               }
+                  {
+                     // Temp: Track cache hits
 
-               {
-                  // Temp: Track cache hits
-
-                  cache_hits += 1;
-                  if cache_hits >= cache_hits_print_threshold {
-                     println!("cache hits: {cache_hits_print_threshold}");
-                     cache_hits_print_threshold <<= 1;
+                     cache_hits += 1;
+                     if cache_hits >= cache_hits_print_threshold {
+                        println!("cache hits: {cache_hits_print_threshold}");
+                        cache_hits_print_threshold <<= 1;
+                     }
                   }
-               }
 
-               continue;
+                  continue;
+               } else {
+                  cache_guard.remove_entry(cache_key);
+               }
             }
          }
 
@@ -229,26 +230,40 @@ pub async fn upstream_tls_handler(
                         panic!("Wrote nothing to client after receiving data from upstream")
                      }
 
+                     let (site_name, mut ttl) = crate::dns::get_question_as_string_and_lowest_ttl(
+                        udp_segment_no_tcp_prefix.as_ptr(),
+                        udp_segment_no_tcp_prefix.len(),
+                     );
+
+                     if ttl < crate::statics::MINIMUM_TTL_OVERRIDE {
+                        ttl = crate::statics::MINIMUM_TTL_OVERRIDE;
+                     }
+
                      let elapsed_ms =
                         crate::util::get_unix_ts_millis() - DNS_QUESTION_CACHE.lock().await.get(cache_key).unwrap().asked_timestamp;
 
+                     let unix_timestamp_secs = crate::util::get_unix_ts_secs();
+
                      cache_guard.insert(
                         cache_key.to_vec(),
-                        AnswerCache { answer: udp_segment_no_tcp_prefix.to_vec(), _elapsed_ms: elapsed_ms, _ttl: 0 },
+                        AnswerCache {
+                           answer: udp_segment_no_tcp_prefix.to_vec(),
+                           _elapsed_ms: elapsed_ms,
+                           expires_at: unix_timestamp_secs + ttl,
+                        },
                      );
 
                      unsafe {
                         if !crate::statics::ARGS.daemon {
-                           let debug_query =
-                              crate::dns::get_question_as_string(udp_segment_no_tcp_prefix.as_ptr(), udp_segment_no_tcp_prefix.len());
                            let fastest_count = crate::stats::Stats::array_increment_fastest(
                               STATS.as_mut(),
                               format!("{}", upstream_dns.socket_addr.ip()).as_str(),
                            );
                            println!(
-                              "{:>4}ms -> {} ({} [{}])",
+                              "{:>4}ms -> {}. ttl: {} ({} [{}])",
                               elapsed_ms,
-                              debug_query,
+                              site_name,
+                              ttl,
                               format!("{}", upstream_dns.socket_addr.ip()).as_str(),
                               fastest_count
                            );
