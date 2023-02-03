@@ -105,20 +105,19 @@ pub async fn go(port: u16) {
                   continue;
                } else {
                   answer_cache_guard.remove_entry(cache_key);
-                  DNS_QUESTION_CACHE.lock().await.insert(cache_key.to_vec(), QuestionCache { asked_at: crate::util::get_unix_ts_millis() });
-               }
-            } else {
-               // Add to QUESTION cache
-
-               let mut question_cache_guard = DNS_QUESTION_CACHE.lock().await;
-               if !question_cache_guard.contains_key(cache_key) {
-                  question_cache_guard.insert(cache_key.to_vec(), QuestionCache { asked_at: crate::util::get_unix_ts_millis() });
                }
             }
          }
 
          {
+            // Add to QUESTION cache
+
+            DNS_QUESTION_CACHE.lock().await.insert(cache_key.to_vec(), QuestionCache { asked_at: crate::util::get_unix_ts_millis() });
+         }
+
+         {
             // Save the client state
+
             BUF_ID_ROUTER.lock().await.insert(id, client_addr);
          }
 
