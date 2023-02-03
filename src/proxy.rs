@@ -260,10 +260,9 @@ pub async fn upstream_tls_handler(
                               format!("{}", upstream_dns.socket_addr.ip()).as_str(),
                            );
                            println!(
-                              "{:>4}ms -> {}. ttl: {} ({} [{}])",
+                              "{:>4}ms -> {} ({} [{}])",
                               elapsed_ms,
                               site_name,
-                              ttl,
                               format!("{}", upstream_dns.socket_addr.ip()).as_str(),
                               fastest_count
                            );
