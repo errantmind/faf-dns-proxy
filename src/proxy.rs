@@ -22,7 +22,7 @@ static mut STATS: once_cell::sync::Lazy<[crate::stats::Stats; crate::statics::UP
    once_cell::sync::Lazy::new(crate::stats::init_stats);
 
 struct QuestionCache {
-   asked_timestamp: u128,
+   asked_at: u128,
 }
 
 struct AnswerCache {
@@ -82,9 +82,9 @@ pub async fn go(port: u16) {
          {
             // Add to QUESTION cache (only once)
 
-            let mut cache_guard = DNS_QUESTION_CACHE.lock().await;
-            if !cache_guard.contains_key(cache_key) {
-               cache_guard.insert(cache_key.to_vec(), QuestionCache { asked_timestamp: crate::util::get_unix_ts_millis() });
+            let mut question_cache_guard = DNS_QUESTION_CACHE.lock().await;
+            if !question_cache_guard.contains_key(cache_key) {
+               question_cache_guard.insert(cache_key.to_vec(), QuestionCache { asked_at: crate::util::get_unix_ts_millis() });
             }
          }
 
@@ -92,8 +92,8 @@ pub async fn go(port: u16) {
             // Scope for cache guard.
             // First check the ANSWER cache and respond immediately if we already have an answer to the query
 
-            let mut cache_guard = DNS_ANSWER_CACHE.lock().await;
-            let cached_response_maybe = cache_guard.get_mut(cache_key);
+            let mut answer_cache_guard = DNS_ANSWER_CACHE.lock().await;
+            let cached_response_maybe = answer_cache_guard.get_mut(cache_key);
 
             if let Some(cached_response) = cached_response_maybe {
                if cached_response.expires_at > crate::util::get_unix_ts_secs() {
@@ -113,7 +113,8 @@ pub async fn go(port: u16) {
 
                   continue;
                } else {
-                  cache_guard.remove_entry(cache_key);
+                  answer_cache_guard.remove_entry(cache_key);
+                  DNS_QUESTION_CACHE.lock().await.insert(cache_key.to_vec(), QuestionCache { asked_at: crate::util::get_unix_ts_millis() });
                }
             }
          }
@@ -239,8 +240,7 @@ pub async fn upstream_tls_handler(
                         ttl = crate::statics::MINIMUM_TTL_OVERRIDE;
                      }
 
-                     let elapsed_ms =
-                        crate::util::get_unix_ts_millis() - DNS_QUESTION_CACHE.lock().await.get(cache_key).unwrap().asked_timestamp;
+                     let elapsed_ms = crate::util::get_unix_ts_millis() - DNS_QUESTION_CACHE.lock().await.get(cache_key).unwrap().asked_at;
 
                      let unix_timestamp_secs = crate::util::get_unix_ts_secs();
 
