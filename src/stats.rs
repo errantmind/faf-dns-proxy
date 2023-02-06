@@ -24,6 +24,7 @@ pub struct Stats {
 }
 
 impl Stats {
+   #[inline]
    pub fn array_increment_fastest(stat_array: &mut [Self], dns_server_index: usize) -> usize {
       stat_array[dns_server_index].fastest_count += 1;
       stat_array[dns_server_index].fastest_count
@@ -36,6 +37,7 @@ impl std::fmt::Display for Stats {
    }
 }
 
+#[inline]
 pub fn init_stats() -> [Stats; DNS_SERVERS.len()] {
    #[allow(invalid_value)]
    let mut arr: [Stats; DNS_SERVERS.len()] = unsafe { core::mem::MaybeUninit::zeroed().assume_init() };

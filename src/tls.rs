@@ -52,9 +52,6 @@ impl tokio_rustls::rustls::client::StoresClientSessions for PersistCache {
    }
 
    fn get(&self, key: &[u8]) -> Option<Vec<u8>> {
-      // {
-      //    println!("{} entries in cache", self.len().unwrap());
-      // }
       self.cache.lock().unwrap().get(key).cloned()
    }
 }
