@@ -5,7 +5,7 @@ authors = ["James Bates <errantmind@protonmail.com>"]
 edition = "2021"
 
 [profile.dev]
-opt-level = 0
+opt-level = 1
 debug = true
 debug-assertions = true
 overflow-checks = true
@@ -40,5 +40,5 @@ hashbrown = { version = "*", default-features = true, features = ["inline-more",
 
 # async runtime/executor
 tokio = { version = "*", features = ["rt-multi-thread", "net", "io-util", "time", "macros", "parking_lot", "sync"] }
-tokio-rustls = "*"
+tokio-rustls = { version = "*", features = ["default", "early-data"] }
 

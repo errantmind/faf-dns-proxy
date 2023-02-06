@@ -55,7 +55,7 @@ pub async fn go(port: u16) {
 
       let mut tx_channels = Vec::with_capacity(crate::statics::UPSTREAM_DNS_SERVERS.len());
 
-      for dns in &crate::statics::UPSTREAM_DNS_SERVERS {
+      for dns in crate::statics::UPSTREAM_DNS_SERVERS {
          let (tx, rx) = tokio::sync::mpsc::channel(8192);
          tokio::task::spawn(upstream_tls_handler(rx, dns, listener_socket.clone()));
          tx_channels.push(tx);
@@ -136,67 +136,207 @@ pub async fn go(port: u16) {
 }
 
 pub async fn upstream_tls_handler(
-   mut msg_rx: tokio::sync::mpsc::Receiver<Vec<u8>>,
-   upstream_dns: &crate::statics::UpstreamDnsServer,
+   msg_rx: tokio::sync::mpsc::Receiver<Vec<u8>>,
+   upstream_dns: crate::statics::UpstreamDnsServer,
    listener_addr: std::sync::Arc<tokio::net::UdpSocket>,
 ) {
    let tls_client_config = crate::tls::get_tls_client_config();
-   let tls_connector = tokio_rustls::TlsConnector::from(std::sync::Arc::new(tls_client_config));
+   let tls_connector = tokio_rustls::TlsConnector::from(std::sync::Arc::new(tls_client_config)).early_data(true);
 
-   let mut tls_stream = connect(&tls_connector, upstream_dns).await;
+   let mut tls_stream = connect(&tls_connector, &upstream_dns).await;
+   let mut tls_stream_split = tokio::io::split(tls_stream);
+
+   let (mut shutdown_writer_sender_channel, mut shutdown_writer_receiver_channel) = tokio::sync::oneshot::channel();
+   let (mut shutdown_reader_sender_channel, mut shutdown_reader_receiver_channel) = tokio::sync::oneshot::channel();
+
+   let mut write_handle = tokio::task::spawn(handle_writes(tls_stream_split.1, msg_rx, None, shutdown_writer_receiver_channel));
+   let mut read_handle =
+      tokio::task::spawn(handle_reads(tls_stream_split.0, upstream_dns, listener_addr.clone(), shutdown_reader_receiver_channel));
+
+   loop {
+      tokio::select! {
+         write_result = &mut write_handle => {
+            println!("write handle finished");
+
+         if !read_handle.is_finished() {
+            shutdown_reader_sender_channel.send(true).unwrap();
+
+            let _ = read_handle.await;
+         }
+
+         let (msg_rx, unsent_query) = write_result.unwrap();
+
+         (shutdown_writer_sender_channel, shutdown_writer_receiver_channel) = tokio::sync::oneshot::channel();
+         (shutdown_reader_sender_channel, shutdown_reader_receiver_channel) = tokio::sync::oneshot::channel();
+         tls_stream = connect(&tls_connector, &upstream_dns).await;
+         tls_stream_split = tokio::io::split(tls_stream);
+         write_handle = tokio::task::spawn(handle_writes(tls_stream_split.1, msg_rx, unsent_query, shutdown_writer_receiver_channel));
+         read_handle =
+            tokio::task::spawn(handle_reads(tls_stream_split.0, upstream_dns, listener_addr.clone(), shutdown_reader_receiver_channel));
+         },
+         _ = &mut read_handle => {
+            println!("read handle finished");
+
+         if !write_handle.is_finished() {
+            shutdown_writer_sender_channel.send(true).unwrap();
+         }
+
+         let (msg_rx, unsent_query) = write_handle.await.unwrap();
+
+         (shutdown_writer_sender_channel, shutdown_writer_receiver_channel) = tokio::sync::oneshot::channel();
+         (shutdown_reader_sender_channel, shutdown_reader_receiver_channel) = tokio::sync::oneshot::channel();
+         tls_stream = connect(&tls_connector, &upstream_dns).await;
+         tls_stream_split = tokio::io::split(tls_stream);
+         write_handle = tokio::task::spawn(handle_writes(tls_stream_split.1, msg_rx, unsent_query, shutdown_writer_receiver_channel));
+         read_handle =
+            tokio::task::spawn(handle_reads(tls_stream_split.0, upstream_dns, listener_addr.clone(), shutdown_reader_receiver_channel));
+         }
+      }
+   }
+}
+
+async fn handle_writes(
+   mut write_half: tokio::io::WriteHalf<tokio_rustls::client::TlsStream<tokio::net::TcpStream>>,
+   mut msg_rx: tokio::sync::mpsc::Receiver<Vec<u8>>,
+   unsent_previous_query_maybe: Option<Vec<u8>>,
+   mut shutdown_writer_receiver_channel: tokio::sync::oneshot::Receiver<bool>,
+) -> (tokio::sync::mpsc::Receiver<Vec<u8>>, Option<Vec<u8>>) {
+   println!("-> handle writes called");
+
+   if let Some(unsent_previous_query) = unsent_previous_query_maybe {
+      if let Some(unsent_data) = write(&mut write_half, unsent_previous_query).await {
+         return (msg_rx, Some(unsent_data));
+      }
+   }
+
+   //let mut handle_writes_counter = 0;
+   loop {
+      // handle_writes_counter += 1;
+      // if is_power_of_2(handle_writes_counter) {
+      //    println!("handle writes {handle_writes_counter}x times",);
+      // }
+
+      tokio::select! {
+         shutdown_msg = &mut shutdown_writer_receiver_channel => {
+            match shutdown_msg {
+               Ok(_) => return (msg_rx, None),
+               Err(_) => panic!("Shutdown Channel has been closed prematurely"),
+            }
+         },
+         query_msg = msg_rx.recv() => {
+            match query_msg {
+               Some(data) => match write(&mut write_half, data).await {
+                  Some(unsent_data) => return (msg_rx, Some(unsent_data)),
+                  None => {
+                     println!("malfunction?");
+                     continue;
+                  }
+               },
+               None => ()
+            }
+         }
+      }
+
+      // match msg_rx.recv().await {
+      //    Ok(data) => match write(&mut write_half, data).await {
+      //       Some(unsent_data) => return (msg_rx, Some(unsent_data)),
+      //       None => {
+      //          println!("malfunction?");
+      //          continue;
+      //       }
+      //    },
+      //    Err(err) if err == tokio::sync::mpsc::error::TryRecvError::Disconnected => {
+      //       panic!("Channel has been closed prematurely");
+      //    }
+      //    Err(err) if err == tokio::sync::mpsc::error::TryRecvError::Empty => {
+      //       tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
+      //       //tokio::task::yield_now().await;
+      //    }
+      //    Err(_) => std::unreachable!(),
+      // };
+
+      // match shutdown_writer_receiver_channel.try_recv() {
+      //    Ok(_) => return (msg_rx, None),
+      //    Err(err) if err == tokio::sync::oneshot::error::TryRecvError::Closed => {
+      //       panic!("Shutdown Channel has been closed prematurely");
+      //    }
+      //    Err(err) if err == tokio::sync::oneshot::error::TryRecvError::Empty => {
+      //       tokio::task::yield_now().await;
+      //    }
+      //    Err(_) => panic!("Unknown channel error"),
+      // };
+
+      // match msg_rx.try_recv() {
+      //    Ok(data) => match write(&mut write_half, data).await {
+      //       Some(unsent_data) => return (msg_rx, Some(unsent_data)),
+      //       None => {
+      //          println!("malfunction?");
+      //          continue;
+      //       }
+      //    },
+      //    Err(err) if err == tokio::sync::mpsc::error::TryRecvError::Disconnected => {
+      //       panic!("Channel has been closed prematurely");
+      //    }
+      //    Err(err) if err == tokio::sync::mpsc::error::TryRecvError::Empty => {
+      //       tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
+      //       //tokio::task::yield_now().await;
+      //    }
+      //    Err(_) => std::unreachable!(),
+      // };
+
+      //tokio::task::yield_now().await;
+   }
+}
+
+async fn write(
+   mut write_half: &mut tokio::io::WriteHalf<tokio_rustls::client::TlsStream<tokio::net::TcpStream>>,
+   query_buf: Vec<u8>,
+) -> Option<Vec<u8>> {
+   match tokio::io::AsyncWriteExt::write(&mut write_half, &query_buf).await {
+      Ok(_bytes_written_to_socket) => {
+         if tokio::io::AsyncWriteExt::flush(&mut write_half).await.is_err() {
+            Some(query_buf)
+         } else {
+            None
+         }
+      }
+      Err(_) => Some(query_buf),
+   }
+}
+
+async fn handle_reads(
+   mut read_half: tokio::io::ReadHalf<tokio_rustls::client::TlsStream<tokio::net::TcpStream>>,
+   upstream_dns: crate::statics::UpstreamDnsServer,
+   listener_addr: std::sync::Arc<tokio::net::UdpSocket>,
+   mut shutdown_reader_receiver_channel: tokio::sync::oneshot::Receiver<bool>,
+) {
+   println!("-> handle reads called");
 
    let mut response_buf = vec![0; 2 << 15];
 
+   let mut handle_reads_counter = 0;
    loop {
-      let msg_maybe = match tokio::time::timeout(std::time::Duration::from_nanos(100_000), msg_rx.recv()).await {
-         Ok(msg_maybe) => match msg_maybe {
-            Some(data) => Some(data),
-            None => {
-               panic!("Channel has been closed prematurely");
+      handle_reads_counter += 1;
+      if is_power_of_2(handle_reads_counter) {
+         println!("handle reads {handle_reads_counter}x times",);
+      }
+
+      {
+         match shutdown_reader_receiver_channel.try_recv() {
+            Ok(_) => return,
+            Err(err) if err == tokio::sync::oneshot::error::TryRecvError::Closed => {
+               panic!("Shutdown Channel has been closed prematurely");
             }
-         },
-         Err(_) => None,
-      };
-
-      if let Some(query_buf) = msg_maybe {
-         loop {
-            // If we have a query from our local listener, write it to the upstream DNS server.
-            //
-            // We need the below convoluted logic because there doesn't appear to be any way to detect HUPs (hangups).
-            // So, say we get silently disconnected by DNS server (google DNS, cloudflare, etc), a simple `write` call will succeed (!),
-            //   which makes us believe the write was successful, even though it was never delivered.
-            // We NEED a way to know if we still have a 'valid' connection.
-            //
-            if let Ok(ready_status) = tls_stream.get_ref().0.ready(tokio::io::Interest::READABLE | tokio::io::Interest::WRITABLE).await {
-               if !ready_status.is_read_closed() && !ready_status.is_write_closed() {
-                  if let Ok(_bytes_written_to_socket) = tokio::io::AsyncWriteExt::write(&mut tls_stream, &query_buf).await {
-                     break;
-                  }
-               }
+            Err(err) if err == tokio::sync::oneshot::error::TryRecvError::Empty => {
+               tokio::task::yield_now().await;
             }
-
-            tls_stream = connect(&tls_connector, upstream_dns).await
-         }
-      } else {
-         // No request for writes, try reads
-
-         let read_bytes_maybe = match tokio::time::timeout(
-            std::time::Duration::from_nanos(100_000),
-            tokio::io::AsyncReadExt::read(&mut tls_stream, &mut response_buf),
-         )
-         .await
-         {
-            Ok(msg_maybe) => match msg_maybe {
-               Ok(0) => None,
-               Ok(n) => Some(n),
-               Err(_) => None,
-            },
-            Err(_) => None,
+            Err(_) => std::unreachable!(),
          };
 
-         let read_bytes_tcp = match read_bytes_maybe {
-            Some(n) => n,
-            None => continue,
+         let read_bytes_tcp = match tokio::io::AsyncReadExt::read(&mut read_half, &mut response_buf).await {
+            Ok(0) => return,
+            Ok(n) => n,
+            Err(_) => return,
          };
 
          let mut offset = 0;
@@ -283,10 +423,6 @@ async fn connect(
    tls_connector: &tokio_rustls::TlsConnector,
    upstream_dns: &crate::statics::UpstreamDnsServer,
 ) -> tokio_rustls::client::TlsStream<tokio::net::TcpStream> {
-   fn is_power_of_2(num: i32) -> bool {
-      num & (num - 1) == 0
-   }
-
    let mut connection_failures = 0;
    let mut tls_failures = 0;
 
@@ -323,4 +459,8 @@ async fn connect(
 
       break tls_stream;
    }
+}
+
+fn is_power_of_2(num: i32) -> bool {
+   num & (num - 1) == 0
 }
