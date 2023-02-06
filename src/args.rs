@@ -1,6 +1,6 @@
 /*
-FaF is a cutting edge, high performance dns proxy
-Copyright (C) 2021  James Bates
+FaF is a high performance DNS over TLS proxy
+Copyright (C) 2022  James Bates
 
 This program is free software: you can redistribute it and/or modify
 it under the terms of the GNU Affero General Public License as published by
@@ -19,7 +19,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 use clap::Parser;
 
 /// FaF DNS Proxy - Faster DNS Resolution
-#[derive(Parser, Debug)]
+#[derive(Parser, Debug, Default)]
 #[clap(author, version, about, long_about = None)]
 pub struct Args {
    /// [optional] daemon mode, no logging output

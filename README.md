@@ -1,27 +1,24 @@
 # FaF DNS Proxy
 
-WIP, this project works but is not feature complete.
+`FaF DNS Proxy` is a cross-platform, encrypted DNS (DoT) proxy / forwarder written in Rust. It follows the general design philosophy of the [FaF Web Server](https://www.github.com/errantmind/faf).
 
-`FaF DNS Proxy` is a Linux (only) DoT proxy / forwarder written in Rust. It follows the design philosophy of the [FaF Web Server](https://www.github.com/errantmind/faf).
-
-This is an experimental project and not 'production-ready', although I do use it on my own machines. I am working to clean up the code for easier comprehension and to add the last few remaining features.
-
-Currently, the TTL is IGNORED and all IPs are cached indefinitely. This actually doesn't cause as many issues as you might think, I too was surprised, but this will be fixed in the next version.
+FaF has been tested on Linux and Windows and may work on other platforms as well.
 
 ## Why Use This?
 
 - You want the fastest DNS resolution available because you notice it speeds up your web browsing experience, among other areas
-- You don't want to use unencrypted DNS because you don't want your ISP spying on your traffic and selling it to third parties
-- You want something that 'just works' optimally out-of-the-box, with the default configuration, and you don't feel like configuring `systemd-resolved`, `unbound`, etc
+- You don't want your ISP spying on your DNS queries
+- You want something that 'just works' out-of-the-box, with the default configuration
 - Perhaps you have noticed occasional, mysterious delays that add 2-10 seconds to some page loads when using some other resolvers with DoT / DoH
 
 ## Features
 
 - 'Shotgun' DNS queries to multiple upstream resolvers by default. The first reply wins
-- Caching of DNS answers (using the TTL on the answer)
-- TLS Session caching (to avoid a full handshake when (re)connecting to upstream resolvers)
-- Event driven, asynchronous design. Avoids the extra latency of synchronous networking wherever possible
-- Designed to minimize the most latency intensive part of encrypted DNS: (re)connecting to upstream DNS resolvers. Instead of using a generic connection pool, FaF uses an event-activated thread for each upstream resolver, to ensure back-to-back requests reuse an existing connection upstream. This is important as most upstream resolvers unilaterally terminate connections after being idle for ~10 seconds, so we want to minimize reconnects by keeping established connections alive as long as possible
+- Caching of DNS answers (using the TTL on the answer), with optional minimum TTL override
+- TLS Session Caching (to avoid a full handshake when (re)connecting to upstream resolvers)
+- TLS 'early data' to minimize round-trips
+- Full-duplex async design
+- Connection re-use and automatic reconnections when connections are dropped
 
 ## How Does This Work?
 
@@ -59,18 +56,11 @@ options no-check-names
 
 ## Misc Notes
 
-- By default, Firefox and some other browsers bypass the system's DNS. To reap the benefits of FaF while browsing, ensure this is disabled. This is usually somewhere in the browser's network settings.
-
-## Requirements and How-To
-
-FaF DNS Proxy requires:
-
-- linux x86_64
-- nightly Rust
+- By default, Firefox and some other browsers bypass the system's DNS, using their own built-in DoH. To reap the benefits of FaF while browsing, ensure this is disabled. This is usually somewhere in the browser's network settings.
 
 ## Code Tour
 
-Just look at `epoll.rs`, everything is either there or referenced there.
+Just look at `proxy.rs`, everything is either there or referenced there.
 
 ## Contributions
 

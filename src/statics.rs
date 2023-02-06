@@ -1,6 +1,6 @@
 /*
-FaF is a cutting edge, high performance dns proxy
-Copyright (C) 2021  James Bates
+FaF is a high performance DNS over TLS proxy
+Copyright (C) 2022  James Bates
 
 This program is free software: you can redistribute it and/or modify
 it under the terms of the GNU Affero General Public License as published by
@@ -21,33 +21,18 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 pub static mut ARGS: crate::args::Args = unsafe { core::mem::MaybeUninit::zeroed().assume_init() };
 
-pub static SELF_CHECKSUM: once_cell::sync::Lazy<Option<u64>> = once_cell::sync::Lazy::new(|| Some(crate::util::self_checksum().unwrap().0));
-
-// faf spawns one thread per core, meaning each thread can handle 1024 connections.
-// If we don't UNSHARE, then we can only handle 'n' total connections across all threads (instead of 'each')
-pub const MAX_CONN: usize = 64;
-
-// the buffer size of the request buffer. Currently set to 4096 bytes (most common page size)
-pub const REQ_BUFF_SIZE: usize = 4096;
-
-// our syscall to wait for epoll events will timeout every 1ms. This is marginally faster in some cases than a longer timeout
-pub const EPOLL_TIMEOUT_MILLIS: isize = 1000;
-
-// 4096 bytes page size / 12 byte epoll_event size = ~340. This size reduces page faults
-pub const MAX_EPOLL_EVENTS_RETURNED: usize = 340;
-
-// isolate to core 0
-pub const CPU_CORE_CLIENT_LISTENER: usize = 0;
-
+#[derive(Clone, Copy)]
 pub struct UpstreamDnsServer {
    pub server_name: &'static str,
-   pub ip: &'static str,
+   pub socket_addr: std::net::SocketAddrV4,
 }
 
 pub const UPSTREAM_DNS_SERVERS: [UpstreamDnsServer; 5] = [
-   UpstreamDnsServer { server_name: "one.one.one.one", ip: "1.1.1.1" },
-   UpstreamDnsServer { server_name: "one.one.one.one", ip: "1.0.0.1" },
-   UpstreamDnsServer { server_name: "dns.google", ip: "8.8.8.8" },
-   UpstreamDnsServer { server_name: "dns.google", ip: "8.8.4.4" },
-   UpstreamDnsServer { server_name: "dns.quad9.net", ip: "9.9.9.9" },
+   UpstreamDnsServer { server_name: "one.one.one.one", socket_addr: std::net::SocketAddrV4::new(std::net::Ipv4Addr::new(1, 1, 1, 1), 853) },
+   UpstreamDnsServer { server_name: "one.one.one.one", socket_addr: std::net::SocketAddrV4::new(std::net::Ipv4Addr::new(1, 0, 0, 1), 853) },
+   UpstreamDnsServer { server_name: "dns.google", socket_addr: std::net::SocketAddrV4::new(std::net::Ipv4Addr::new(8, 8, 8, 8), 853) },
+   UpstreamDnsServer { server_name: "dns.google", socket_addr: std::net::SocketAddrV4::new(std::net::Ipv4Addr::new(8, 8, 4, 4), 853) },
+   UpstreamDnsServer { server_name: "dns.quad9.net", socket_addr: std::net::SocketAddrV4::new(std::net::Ipv4Addr::new(9, 9, 9, 9), 853) },
 ];
+
+pub const MINIMUM_TTL_OVERRIDE: u64 = 7200;
