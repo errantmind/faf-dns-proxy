@@ -209,82 +209,33 @@ async fn handle_writes(
       }
    }
 
-   //let mut handle_writes_counter = 0;
    loop {
-      // handle_writes_counter += 1;
-      // if is_power_of_2(handle_writes_counter) {
-      //    println!("handle writes {handle_writes_counter}x times",);
-      // }
-
       tokio::select! {
          shutdown_msg = &mut shutdown_writer_receiver_channel => {
             match shutdown_msg {
-               Ok(_) => return (msg_rx, None),
-               Err(_) => panic!("Shutdown Channel has been closed prematurely"),
+               Ok(_) => {
+                  // Shutdown requested, return the queue
+                  return (msg_rx, None)
+               },
+               Err(_) => panic!("Shutdown channel has been closed prematurely"),
             }
          },
          query_msg = msg_rx.recv() => {
             match query_msg {
                Some(data) => match write(&mut write_half, data).await {
-                  Some(unsent_data) => return (msg_rx, Some(unsent_data)),
+                  Some(unsent_data) => {
+                     // Qeury failed
+                     return (msg_rx, Some(unsent_data))
+                  },
                   None => {
-                     println!("malfunction?");
+                     // Query completed successfully
                      continue;
                   }
                },
-               None => ()
+               None => panic!("Query channel has been closed prematurely")
             }
          }
       }
-
-      // match msg_rx.recv().await {
-      //    Ok(data) => match write(&mut write_half, data).await {
-      //       Some(unsent_data) => return (msg_rx, Some(unsent_data)),
-      //       None => {
-      //          println!("malfunction?");
-      //          continue;
-      //       }
-      //    },
-      //    Err(err) if err == tokio::sync::mpsc::error::TryRecvError::Disconnected => {
-      //       panic!("Channel has been closed prematurely");
-      //    }
-      //    Err(err) if err == tokio::sync::mpsc::error::TryRecvError::Empty => {
-      //       tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
-      //       //tokio::task::yield_now().await;
-      //    }
-      //    Err(_) => std::unreachable!(),
-      // };
-
-      // match shutdown_writer_receiver_channel.try_recv() {
-      //    Ok(_) => return (msg_rx, None),
-      //    Err(err) if err == tokio::sync::oneshot::error::TryRecvError::Closed => {
-      //       panic!("Shutdown Channel has been closed prematurely");
-      //    }
-      //    Err(err) if err == tokio::sync::oneshot::error::TryRecvError::Empty => {
-      //       tokio::task::yield_now().await;
-      //    }
-      //    Err(_) => panic!("Unknown channel error"),
-      // };
-
-      // match msg_rx.try_recv() {
-      //    Ok(data) => match write(&mut write_half, data).await {
-      //       Some(unsent_data) => return (msg_rx, Some(unsent_data)),
-      //       None => {
-      //          println!("malfunction?");
-      //          continue;
-      //       }
-      //    },
-      //    Err(err) if err == tokio::sync::mpsc::error::TryRecvError::Disconnected => {
-      //       panic!("Channel has been closed prematurely");
-      //    }
-      //    Err(err) if err == tokio::sync::mpsc::error::TryRecvError::Empty => {
-      //       tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
-      //       //tokio::task::yield_now().await;
-      //    }
-      //    Err(_) => std::unreachable!(),
-      // };
-
-      //tokio::task::yield_now().await;
    }
 }
 
@@ -292,6 +243,7 @@ async fn write(
    mut write_half: &mut tokio::io::WriteHalf<tokio_rustls::client::TlsStream<tokio::net::TcpStream>>,
    query_buf: Vec<u8>,
 ) -> Option<Vec<u8>> {
+   println!("write called");
    match tokio::io::AsyncWriteExt::write(&mut write_half, &query_buf).await {
       Ok(_bytes_written_to_socket) => {
          if tokio::io::AsyncWriteExt::flush(&mut write_half).await.is_err() {
