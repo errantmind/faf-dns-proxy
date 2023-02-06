@@ -31,18 +31,9 @@ mod util;
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 pub fn main() {
-   {
-      // Init args
-
-      use clap::Parser;
-      unsafe { statics::ARGS = args::Args::parse() };
-   };
-
-   unsafe {
-      if !statics::ARGS.daemon {
-         print_banner();
-         print_version();
-      }
+   if !statics::ARGS.daemon {
+      print_banner();
+      print_version();
    }
 
    tokio::runtime::Runtime::new().unwrap().block_on(proxy::go(53));
@@ -64,5 +55,5 @@ fn print_banner() {
 }
 
 fn print_version() {
-   println!("{} v{} | author: errantmind@protonmail.com\n", statics::PROJECT_NAME, statics::VERSION,);
+   println!("{} v{} | repo: https://github.com/errantmind/faf-dns-proxy\n", statics::PROJECT_NAME, statics::VERSION,);
 }

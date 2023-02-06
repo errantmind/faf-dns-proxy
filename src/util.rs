@@ -27,3 +27,8 @@ pub fn get_unix_ts_millis() -> u128 {
 pub fn get_unix_ts_secs() -> u64 {
    std::time::SystemTime::now().duration_since(std::time::SystemTime::UNIX_EPOCH).unwrap().as_secs()
 }
+
+#[inline]
+pub fn is_power_of_2(num: u64) -> bool {
+   num & (num - 1) == 0
+}

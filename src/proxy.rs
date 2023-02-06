@@ -18,14 +18,14 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 use hashbrown::HashMap;
 
-static mut STATS: once_cell::sync::Lazy<[crate::stats::Stats; crate::statics::UPSTREAM_DNS_SERVERS.len()]> =
+static mut STATS: once_cell::sync::Lazy<[crate::stats::Stats; crate::statics::DNS_SERVERS.len()]> =
    once_cell::sync::Lazy::new(crate::stats::init_stats);
 
-struct QuestionCache {
+struct TimingCacheEntry {
    asked_at: u128,
 }
 
-struct AnswerCache {
+struct AnswerCacheEntry {
    answer: Vec<u8>,
    _elapsed_ms: u128,
    expires_at: u64,
@@ -34,10 +34,10 @@ struct AnswerCache {
 const CONN_ERROR_SLEEP_MS: u64 = 1000;
 
 lazy_static::lazy_static! {
-   static ref DNS_QUESTION_CACHE: tokio::sync::Mutex<HashMap<Vec<u8>, QuestionCache>> =
+   static ref DNS_TIMING_CACHE: tokio::sync::Mutex<HashMap<Vec<u8>, TimingCacheEntry>> =
    tokio::sync::Mutex::new(HashMap::default());
 
-   static ref DNS_ANSWER_CACHE: tokio::sync::Mutex<HashMap<Vec<u8>, AnswerCache>> =
+   static ref DNS_ANSWER_CACHE: tokio::sync::Mutex<HashMap<Vec<u8>, AnswerCacheEntry>> =
    tokio::sync::Mutex::new(HashMap::default());
 
    // We route DNS responses by the id they provided in the initial request. This may occasionally cause
@@ -53,19 +53,22 @@ pub async fn go(port: u16) {
       let listener_addr = std::net::SocketAddrV4::new(std::net::Ipv4Addr::UNSPECIFIED, port);
       let listener_socket = std::sync::Arc::new(tokio::net::UdpSocket::bind(listener_addr).await.unwrap());
 
-      let mut tx_channels = Vec::with_capacity(crate::statics::UPSTREAM_DNS_SERVERS.len());
+      let mut tx_channels = Vec::with_capacity(crate::statics::DNS_SERVERS.len());
 
-      for dns in crate::statics::UPSTREAM_DNS_SERVERS {
+      for (dns_server_index, _) in crate::statics::DNS_SERVERS.iter().enumerate() {
          let (tx, rx) = tokio::sync::mpsc::channel(8192);
-         tokio::task::spawn(upstream_tls_handler(rx, dns, listener_socket.clone()));
+         tokio::task::spawn(upstream_tls_handler(rx, dns_server_index, listener_socket.clone()));
          tx_channels.push(tx);
       }
 
+      // 2 bytes reserved for the TCP length + 512 bytes for the DNS query (which is defacto maximum)
       let mut query_buf = vec![0; 514];
+
       let mut cache_hits: u64 = 0;
       let mut cache_hits_print_threshold = 16;
 
       loop {
+         // We reserve the first 2 bytes for the message length which is required for DNS over TCP
          let (read_bytes, client_addr) = match listener_socket.recv_from(&mut query_buf[2..]).await {
             Ok(res) => res,
             Err(err) => {
@@ -73,7 +76,7 @@ pub async fn go(port: u16) {
                continue;
             }
          };
-         assert!(read_bytes <= 512, "Received a datagram with > 512 bytes on the listening socket");
+         assert!(read_bytes <= 512, "Received a datagram with > 512 bytes on the UDP socket");
          let udp_segment = &query_buf[2..read_bytes + 2];
 
          let id = crate::dns::get_id(udp_segment.as_ptr(), udp_segment.len());
@@ -92,11 +95,9 @@ pub async fn go(port: u16) {
                   let wrote = listener_socket.send_to(&cached_response.answer, &client_addr).await.unwrap();
                   assert!(wrote != 0, "Wrote nothing to client after fetching data from cache");
 
-                  {
-                     // Temp: Track cache hits
-
+                  if !crate::statics::ARGS.daemon {
                      cache_hits += 1;
-                     if cache_hits >= cache_hits_print_threshold {
+                     if cache_hits >= 16 && crate::util::is_power_of_2(cache_hits) {
                         println!("cache hits: {cache_hits_print_threshold}");
                         cache_hits_print_threshold <<= 1;
                      }
@@ -110,9 +111,9 @@ pub async fn go(port: u16) {
          }
 
          {
-            // Add to QUESTION cache
+            // We don't have it cached. Add to QUESTION cache for
 
-            DNS_QUESTION_CACHE.lock().await.insert(cache_key.to_vec(), QuestionCache { asked_at: crate::util::get_unix_ts_millis() });
+            DNS_TIMING_CACHE.lock().await.insert(cache_key.to_vec(), TimingCacheEntry { asked_at: crate::util::get_unix_ts_millis() });
          }
 
          {
@@ -137,55 +138,48 @@ pub async fn go(port: u16) {
 
 pub async fn upstream_tls_handler(
    msg_rx: tokio::sync::mpsc::Receiver<Vec<u8>>,
-   upstream_dns: crate::statics::UpstreamDnsServer,
+   upstream_dns_index: usize,
    listener_addr: std::sync::Arc<tokio::net::UdpSocket>,
 ) {
    let tls_client_config = crate::tls::get_tls_client_config();
    let tls_connector = tokio_rustls::TlsConnector::from(std::sync::Arc::new(tls_client_config)).early_data(true);
 
-   let mut tls_stream = connect(&tls_connector, &upstream_dns).await;
-   let mut tls_stream_split = tokio::io::split(tls_stream);
+   let upstream_dns = crate::statics::DNS_SERVERS[upstream_dns_index];
 
    let (mut shutdown_writer_tx, mut shutdown_writer_rx) = tokio::sync::oneshot::channel();
    let (mut shutdown_reader_tx, mut shutdown_reader_rx) = tokio::sync::oneshot::channel();
-
+   let mut tls_stream = connect(&tls_connector, &upstream_dns).await;
+   let mut tls_stream_split = tokio::io::split(tls_stream);
    let mut write_handle = tokio::task::spawn(handle_writes(tls_stream_split.1, msg_rx, None, shutdown_writer_rx));
-   let mut read_handle = tokio::task::spawn(handle_reads(tls_stream_split.0, upstream_dns, listener_addr.clone(), shutdown_reader_rx));
+   let mut read_handle =
+      tokio::task::spawn(handle_reads(tls_stream_split.0, upstream_dns_index, listener_addr.clone(), shutdown_reader_rx));
 
    loop {
-      tokio::select! {
-         write_result = &mut write_handle => {
-         if !read_handle.is_finished() {
-            shutdown_reader_tx.send(true).unwrap();
-            let _ = read_handle.await;
+      let (msg_rx, unsent_query) = tokio::select! {
+            write_result = &mut write_handle => {
+            if !read_handle.is_finished() {
+               shutdown_reader_tx.send(true).unwrap();
+               let _ = read_handle.await;
+            }
+
+            write_result.unwrap()
+            },
+
+            _ = &mut read_handle => {
+            if !write_handle.is_finished() {
+               shutdown_writer_tx.send(true).unwrap();
+            }
+
+            write_handle.await.unwrap()
          }
+      };
 
-         let (msg_rx, unsent_query) = write_result.unwrap();
-
-         (shutdown_writer_tx, shutdown_writer_rx) = tokio::sync::oneshot::channel();
-         (shutdown_reader_tx, shutdown_reader_rx) = tokio::sync::oneshot::channel();
-         tls_stream = connect(&tls_connector, &upstream_dns).await;
-         tls_stream_split = tokio::io::split(tls_stream);
-         write_handle = tokio::task::spawn(handle_writes(tls_stream_split.1, msg_rx, unsent_query, shutdown_writer_rx));
-         read_handle =
-            tokio::task::spawn(handle_reads(tls_stream_split.0, upstream_dns, listener_addr.clone(), shutdown_reader_rx));
-         },
-         _ = &mut read_handle => {
-         if !write_handle.is_finished() {
-            shutdown_writer_tx.send(true).unwrap();
-         }
-
-         let (msg_rx, unsent_query) = write_handle.await.unwrap();
-
-         (shutdown_writer_tx, shutdown_writer_rx) = tokio::sync::oneshot::channel();
-         (shutdown_reader_tx, shutdown_reader_rx) = tokio::sync::oneshot::channel();
-         tls_stream = connect(&tls_connector, &upstream_dns).await;
-         tls_stream_split = tokio::io::split(tls_stream);
-         write_handle = tokio::task::spawn(handle_writes(tls_stream_split.1, msg_rx, unsent_query, shutdown_writer_rx));
-         read_handle =
-            tokio::task::spawn(handle_reads(tls_stream_split.0, upstream_dns, listener_addr.clone(), shutdown_reader_rx));
-         }
-      }
+      (shutdown_writer_tx, shutdown_writer_rx) = tokio::sync::oneshot::channel();
+      (shutdown_reader_tx, shutdown_reader_rx) = tokio::sync::oneshot::channel();
+      tls_stream = connect(&tls_connector, &upstream_dns).await;
+      tls_stream_split = tokio::io::split(tls_stream);
+      write_handle = tokio::task::spawn(handle_writes(tls_stream_split.1, msg_rx, unsent_query, shutdown_writer_rx));
+      read_handle = tokio::task::spawn(handle_reads(tls_stream_split.0, upstream_dns_index, listener_addr.clone(), shutdown_reader_rx));
    }
 }
 
@@ -195,6 +189,7 @@ async fn handle_writes(
    unsent_previous_query_maybe: Option<Vec<u8>>,
    mut shutdown_writer_rx: tokio::sync::oneshot::Receiver<bool>,
 ) -> (tokio::sync::mpsc::Receiver<Vec<u8>>, Option<Vec<u8>>) {
+   // In the event we had an issue previously, we begin by resuming the previous failed request
    if let Some(unsent_previous_query) = unsent_previous_query_maybe {
       if let Some(unsent_data) = write(&mut write_half, unsent_previous_query).await {
          return (msg_rx, Some(unsent_data));
@@ -249,7 +244,7 @@ async fn write(
 
 async fn handle_reads(
    mut read_half: tokio::io::ReadHalf<tokio_rustls::client::TlsStream<tokio::net::TcpStream>>,
-   upstream_dns: crate::statics::UpstreamDnsServer,
+   upstream_dns_index: usize,
    listener_addr: std::sync::Arc<tokio::net::UdpSocket>,
    mut shutdown_reader_rx: tokio::sync::oneshot::Receiver<bool>,
 ) {
@@ -313,30 +308,27 @@ async fn handle_reads(
                         ttl = crate::statics::MINIMUM_TTL_OVERRIDE;
                      }
 
-                     let elapsed_ms = crate::util::get_unix_ts_millis() - DNS_QUESTION_CACHE.lock().await.get(cache_key).unwrap().asked_at;
+                     let elapsed_ms = crate::util::get_unix_ts_millis() - DNS_TIMING_CACHE.lock().await.get(cache_key).unwrap().asked_at;
 
-                     let unix_timestamp_secs = crate::util::get_unix_ts_secs();
+                     let current_unix_timestamp_secs = crate::util::get_unix_ts_secs();
 
                      cache_guard.insert(
                         cache_key.to_vec(),
-                        AnswerCache {
+                        AnswerCacheEntry {
                            answer: udp_segment_no_tcp_prefix.to_vec(),
                            _elapsed_ms: elapsed_ms,
-                           expires_at: unix_timestamp_secs + ttl,
+                           expires_at: current_unix_timestamp_secs + ttl,
                         },
                      );
 
                      unsafe {
                         if !crate::statics::ARGS.daemon {
-                           let fastest_count = crate::stats::Stats::array_increment_fastest(
-                              STATS.as_mut(),
-                              format!("{}", upstream_dns.socket_addr.ip()).as_str(),
-                           );
+                           let fastest_count = crate::stats::Stats::array_increment_fastest(STATS.as_mut(), upstream_dns_index);
                            println!(
                               "{:>4}ms -> {} ({} [{}])",
                               elapsed_ms,
                               site_name,
-                              format!("{}", upstream_dns.socket_addr.ip()).as_str(),
+                              format!("{}", crate::statics::DNS_SERVERS[upstream_dns_index].socket_addr.ip()).as_str(),
                               fastest_count
                            );
                         }
@@ -359,10 +351,6 @@ async fn connect(
    tls_connector: &tokio_rustls::TlsConnector,
    upstream_dns: &crate::statics::UpstreamDnsServer,
 ) -> tokio_rustls::client::TlsStream<tokio::net::TcpStream> {
-   fn is_power_of_2(num: i32) -> bool {
-      num & (num - 1) == 0
-   }
-
    let mut connection_failures = 0;
    let mut tls_failures = 0;
 
@@ -372,7 +360,7 @@ async fn connect(
          Err(err) => {
             println!("{err}");
             connection_failures += 1;
-            if is_power_of_2(connection_failures) {
+            if crate::util::is_power_of_2(connection_failures) {
                println!("failed {}x times connecting to: {}", connection_failures, upstream_dns.socket_addr);
             }
             tokio::time::sleep(tokio::time::Duration::from_millis(CONN_ERROR_SLEEP_MS)).await;
@@ -389,7 +377,7 @@ async fn connect(
             Err(err) => {
                println!("{err}");
                tls_failures += 1;
-               if is_power_of_2(tls_failures) {
+               if crate::util::is_power_of_2(tls_failures) {
                   println!("failed {}x times establishing tls connection to: {}", tls_failures, upstream_dns.socket_addr);
                }
                tokio::time::sleep(tokio::time::Duration::from_millis(CONN_ERROR_SLEEP_MS)).await;

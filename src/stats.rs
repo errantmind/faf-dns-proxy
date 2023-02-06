@@ -24,20 +24,9 @@ pub struct Stats {
 }
 
 impl Stats {
-   fn increment_fastest(&mut self) {
-      self.fastest_count += 1;
-   }
-
-   /// Could be slow if there are a large number of DNS servers
-   pub fn array_increment_fastest(stat_array: &mut [Self], dns_ip_key: &str) -> usize {
-      for stats in stat_array {
-         if stats.dns_ip == dns_ip_key {
-            stats.increment_fastest();
-            return stats.fastest_count;
-         }
-      }
-
-      0
+   pub fn array_increment_fastest(stat_array: &mut [Self], dns_server_index: usize) -> usize {
+      stat_array[dns_server_index].fastest_count += 1;
+      stat_array[dns_server_index].fastest_count
    }
 }
 
@@ -47,13 +36,13 @@ impl std::fmt::Display for Stats {
    }
 }
 
-pub fn init_stats() -> [Stats; UPSTREAM_DNS_SERVERS.len()] {
+pub fn init_stats() -> [Stats; DNS_SERVERS.len()] {
    #[allow(invalid_value)]
-   let mut arr: [Stats; UPSTREAM_DNS_SERVERS.len()] = unsafe { core::mem::MaybeUninit::zeroed().assume_init() };
+   let mut arr: [Stats; DNS_SERVERS.len()] = unsafe { core::mem::MaybeUninit::zeroed().assume_init() };
    let mut index = 0;
 
-   while index < UPSTREAM_DNS_SERVERS.len() {
-      arr[index] = Stats { dns_ip: UPSTREAM_DNS_SERVERS[index].socket_addr.ip().to_string(), fastest_count: 0 };
+   while index < DNS_SERVERS.len() {
+      arr[index] = Stats { dns_ip: DNS_SERVERS[index].socket_addr.ip().to_string(), fastest_count: 0 };
       index += 1;
    }
 

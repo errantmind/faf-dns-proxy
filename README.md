@@ -16,9 +16,8 @@ FaF has been tested on Linux and Windows and may work on other platforms as well
 - 'Shotgun' DNS queries to multiple upstream resolvers by default. The first reply wins
 - Caching of DNS answers (using the TTL on the answer), with optional minimum TTL override
 - TLS Session Caching (to avoid a full handshake when (re)connecting to upstream resolvers)
-- TLS 'early data' to minimize round-trips
 - Full-duplex async design
-- Connection re-use and automatic reconnections when connections are dropped
+- Connection re-use and automatic reconnections when connections are closed
 
 ## How Does This Work?
 
@@ -30,18 +29,29 @@ At a basic level:
 4. If it is not in the cache, FaF encrypts your request and sends it to (one or more) upstream DNS resolvers
 5. Upon receiving a response from an upstream DNS resolver, FaF answers your device's original query
 
-## How To Use This?
+## How To Use This (Linux)?
 
 1. Clone this repository and build it using `cargo +nightly build --release`
 2. Stop your existing DNS resolver. See the next section for an example.
 3. Run the binary with elevated privileges so it can listen on port 53 (DNS)
-4. Navigate to some websites to check and see if it is working
+4. Navigate to some websites to check and see if it is working. You should see resolution information for each website you visit your terminal. If you don't, you may need to disable your brower's built-in DNS proxying service. This is usually in your brower's network settings and may be called `DoH` or `DNS over HTTPS`
 5. If it is working, disable your existing DNS resolver so it doesn't 'come back' (on reboot usually)
 6. If your linux distro uses systemd, check out the example service in this repo to enable it to run on boot. You'll probably want to copy the `faf-dns-proxy` binary somewhere first.
 
 If you have a problem, and suddenly realize you can't search the internet for answers anymore because your DNS is broken, just stop FaF and re-enable your previous DNS resolver.
 
-## Simple Setup for Distros Packaged with `systemd-resolved`
+## How To Use This (Windows)?
+
+1. Clone this repository and build it using `cargo +nightly build --release`
+2. Navigate to your system's network settings and change your system's primary DNS resolver to 127.0.0.1. Leave the 'alternative' empty.
+3. Open Powershell with administrator privileges (so it can listen on port 53 (DNS)) and run the newly built binary
+4. Navigate to some websites to check and see if it is working. You should see resolution information for each website you visit in the Powershell window. If you don't, you may need to disable your brower's built-in DNS proxying service. This is usually in your brower's network settings and may be called `DoH` or `DNS over HTTPS`
+5. If it is working, you can add a shortcut to the binary to your startup folder.
+6. If your linux distro uses systemd, check out the example service in this repo to enable it to run on boot. You'll probably want to copy the `faf-dns-proxy` binary somewhere first.
+
+If you have a problem, and suddenly realize you can't search the internet for answers anymore because your DNS is broken, undo the changes to your system's DNS settings.
+
+## Simple Setup for Linux distros Packaged with `systemd-resolved`
 
 - Follow the above steps. On step 2:
   - Stop systemd-resolved with `sudo systemctl stop --now systemd-resolved.service`
