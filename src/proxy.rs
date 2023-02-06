@@ -156,11 +156,8 @@ pub async fn upstream_tls_handler(
    loop {
       tokio::select! {
          write_result = &mut write_handle => {
-            println!("write handle finished");
-
          if !read_handle.is_finished() {
             shutdown_reader_sender_channel.send(true).unwrap();
-
             let _ = read_handle.await;
          }
 
@@ -175,8 +172,6 @@ pub async fn upstream_tls_handler(
             tokio::task::spawn(handle_reads(tls_stream_split.0, upstream_dns, listener_addr.clone(), shutdown_reader_receiver_channel));
          },
          _ = &mut read_handle => {
-            println!("read handle finished");
-
          if !write_handle.is_finished() {
             shutdown_writer_sender_channel.send(true).unwrap();
          }
@@ -201,8 +196,6 @@ async fn handle_writes(
    unsent_previous_query_maybe: Option<Vec<u8>>,
    mut shutdown_writer_receiver_channel: tokio::sync::oneshot::Receiver<bool>,
 ) -> (tokio::sync::mpsc::Receiver<Vec<u8>>, Option<Vec<u8>>) {
-   println!("-> handle writes called");
-
    if let Some(unsent_previous_query) = unsent_previous_query_maybe {
       if let Some(unsent_data) = write(&mut write_half, unsent_previous_query).await {
          return (msg_rx, Some(unsent_data));
@@ -243,7 +236,6 @@ async fn write(
    mut write_half: &mut tokio::io::WriteHalf<tokio_rustls::client::TlsStream<tokio::net::TcpStream>>,
    query_buf: Vec<u8>,
 ) -> Option<Vec<u8>> {
-   println!("write called");
    match tokio::io::AsyncWriteExt::write(&mut write_half, &query_buf).await {
       Ok(_bytes_written_to_socket) => {
          if tokio::io::AsyncWriteExt::flush(&mut write_half).await.is_err() {
@@ -262,17 +254,9 @@ async fn handle_reads(
    listener_addr: std::sync::Arc<tokio::net::UdpSocket>,
    mut shutdown_reader_receiver_channel: tokio::sync::oneshot::Receiver<bool>,
 ) {
-   println!("-> handle reads called");
-
    let mut response_buf = vec![0; 2 << 15];
 
-   let mut handle_reads_counter = 0;
    loop {
-      handle_reads_counter += 1;
-      if is_power_of_2(handle_reads_counter) {
-         println!("handle reads {handle_reads_counter}x times",);
-      }
-
       {
          match shutdown_reader_receiver_channel.try_recv() {
             Ok(_) => return,
@@ -375,6 +359,10 @@ async fn connect(
    tls_connector: &tokio_rustls::TlsConnector,
    upstream_dns: &crate::statics::UpstreamDnsServer,
 ) -> tokio_rustls::client::TlsStream<tokio::net::TcpStream> {
+   fn is_power_of_2(num: i32) -> bool {
+      num & (num - 1) == 0
+   }
+
    let mut connection_failures = 0;
    let mut tls_failures = 0;
 
@@ -411,8 +399,4 @@ async fn connect(
 
       break tls_stream;
    }
-}
-
-fn is_power_of_2(num: i32) -> bool {
-   num & (num - 1) == 0
 }
