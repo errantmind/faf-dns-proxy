@@ -146,45 +146,44 @@ pub async fn upstream_tls_handler(
    let mut tls_stream = connect(&tls_connector, &upstream_dns).await;
    let mut tls_stream_split = tokio::io::split(tls_stream);
 
-   let (mut shutdown_writer_sender_channel, mut shutdown_writer_receiver_channel) = tokio::sync::oneshot::channel();
-   let (mut shutdown_reader_sender_channel, mut shutdown_reader_receiver_channel) = tokio::sync::oneshot::channel();
+   let (mut shutdown_writer_tx, mut shutdown_writer_rx) = tokio::sync::oneshot::channel();
+   let (mut shutdown_reader_tx, mut shutdown_reader_rx) = tokio::sync::oneshot::channel();
 
-   let mut write_handle = tokio::task::spawn(handle_writes(tls_stream_split.1, msg_rx, None, shutdown_writer_receiver_channel));
-   let mut read_handle =
-      tokio::task::spawn(handle_reads(tls_stream_split.0, upstream_dns, listener_addr.clone(), shutdown_reader_receiver_channel));
+   let mut write_handle = tokio::task::spawn(handle_writes(tls_stream_split.1, msg_rx, None, shutdown_writer_rx));
+   let mut read_handle = tokio::task::spawn(handle_reads(tls_stream_split.0, upstream_dns, listener_addr.clone(), shutdown_reader_rx));
 
    loop {
       tokio::select! {
          write_result = &mut write_handle => {
          if !read_handle.is_finished() {
-            shutdown_reader_sender_channel.send(true).unwrap();
+            shutdown_reader_tx.send(true).unwrap();
             let _ = read_handle.await;
          }
 
          let (msg_rx, unsent_query) = write_result.unwrap();
 
-         (shutdown_writer_sender_channel, shutdown_writer_receiver_channel) = tokio::sync::oneshot::channel();
-         (shutdown_reader_sender_channel, shutdown_reader_receiver_channel) = tokio::sync::oneshot::channel();
+         (shutdown_writer_tx, shutdown_writer_rx) = tokio::sync::oneshot::channel();
+         (shutdown_reader_tx, shutdown_reader_rx) = tokio::sync::oneshot::channel();
          tls_stream = connect(&tls_connector, &upstream_dns).await;
          tls_stream_split = tokio::io::split(tls_stream);
-         write_handle = tokio::task::spawn(handle_writes(tls_stream_split.1, msg_rx, unsent_query, shutdown_writer_receiver_channel));
+         write_handle = tokio::task::spawn(handle_writes(tls_stream_split.1, msg_rx, unsent_query, shutdown_writer_rx));
          read_handle =
-            tokio::task::spawn(handle_reads(tls_stream_split.0, upstream_dns, listener_addr.clone(), shutdown_reader_receiver_channel));
+            tokio::task::spawn(handle_reads(tls_stream_split.0, upstream_dns, listener_addr.clone(), shutdown_reader_rx));
          },
          _ = &mut read_handle => {
          if !write_handle.is_finished() {
-            shutdown_writer_sender_channel.send(true).unwrap();
+            shutdown_writer_tx.send(true).unwrap();
          }
 
          let (msg_rx, unsent_query) = write_handle.await.unwrap();
 
-         (shutdown_writer_sender_channel, shutdown_writer_receiver_channel) = tokio::sync::oneshot::channel();
-         (shutdown_reader_sender_channel, shutdown_reader_receiver_channel) = tokio::sync::oneshot::channel();
+         (shutdown_writer_tx, shutdown_writer_rx) = tokio::sync::oneshot::channel();
+         (shutdown_reader_tx, shutdown_reader_rx) = tokio::sync::oneshot::channel();
          tls_stream = connect(&tls_connector, &upstream_dns).await;
          tls_stream_split = tokio::io::split(tls_stream);
-         write_handle = tokio::task::spawn(handle_writes(tls_stream_split.1, msg_rx, unsent_query, shutdown_writer_receiver_channel));
+         write_handle = tokio::task::spawn(handle_writes(tls_stream_split.1, msg_rx, unsent_query, shutdown_writer_rx));
          read_handle =
-            tokio::task::spawn(handle_reads(tls_stream_split.0, upstream_dns, listener_addr.clone(), shutdown_reader_receiver_channel));
+            tokio::task::spawn(handle_reads(tls_stream_split.0, upstream_dns, listener_addr.clone(), shutdown_reader_rx));
          }
       }
    }
@@ -194,7 +193,7 @@ async fn handle_writes(
    mut write_half: tokio::io::WriteHalf<tokio_rustls::client::TlsStream<tokio::net::TcpStream>>,
    mut msg_rx: tokio::sync::mpsc::Receiver<Vec<u8>>,
    unsent_previous_query_maybe: Option<Vec<u8>>,
-   mut shutdown_writer_receiver_channel: tokio::sync::oneshot::Receiver<bool>,
+   mut shutdown_writer_rx: tokio::sync::oneshot::Receiver<bool>,
 ) -> (tokio::sync::mpsc::Receiver<Vec<u8>>, Option<Vec<u8>>) {
    if let Some(unsent_previous_query) = unsent_previous_query_maybe {
       if let Some(unsent_data) = write(&mut write_half, unsent_previous_query).await {
@@ -204,7 +203,7 @@ async fn handle_writes(
 
    loop {
       tokio::select! {
-         shutdown_msg = &mut shutdown_writer_receiver_channel => {
+         shutdown_msg = &mut shutdown_writer_rx => {
             match shutdown_msg {
                Ok(_) => {
                   // Shutdown requested, return the queue
@@ -252,28 +251,29 @@ async fn handle_reads(
    mut read_half: tokio::io::ReadHalf<tokio_rustls::client::TlsStream<tokio::net::TcpStream>>,
    upstream_dns: crate::statics::UpstreamDnsServer,
    listener_addr: std::sync::Arc<tokio::net::UdpSocket>,
-   mut shutdown_reader_receiver_channel: tokio::sync::oneshot::Receiver<bool>,
+   mut shutdown_reader_rx: tokio::sync::oneshot::Receiver<bool>,
 ) {
    let mut response_buf = vec![0; 2 << 15];
 
    loop {
       {
-         match shutdown_reader_receiver_channel.try_recv() {
-            Ok(_) => return,
-            Err(err) if err == tokio::sync::oneshot::error::TryRecvError::Closed => {
-               panic!("Shutdown Channel has been closed prematurely");
-            }
-            Err(err) if err == tokio::sync::oneshot::error::TryRecvError::Empty => {
-               tokio::task::yield_now().await;
-            }
-            Err(_) => std::unreachable!(),
-         };
+         let tls_bytes_read;
 
-         let read_bytes_tcp = match tokio::io::AsyncReadExt::read(&mut read_half, &mut response_buf).await {
-            Ok(0) => return,
-            Ok(n) => n,
-            Err(_) => return,
-         };
+         tokio::select! {
+            shutdown_msg = &mut shutdown_reader_rx => {
+               match shutdown_msg {
+                  Ok(_) => return,
+                  Err(_) => panic!("Shutdown Channel has been closed prematurely")
+               };
+            },
+            read_result = tokio::io::AsyncReadExt::read(&mut read_half, &mut response_buf) => {
+               match read_result {
+                  Ok(0) => return,
+                  Ok(n) => tls_bytes_read = n,
+                  Err(_) => return,
+               }
+            }
+         }
 
          let mut offset = 0;
          loop {
@@ -282,8 +282,8 @@ async fn handle_reads(
                panic!("Tcp reported len is invalid ({udp_segment_len})");
             };
             assert!(
-               udp_segment_len <= (read_bytes_tcp - 2),
-               "Udp segment length cannot be larger than the TCP wrapper ({udp_segment_len}/{read_bytes_tcp})"
+               udp_segment_len <= (tls_bytes_read - 2),
+               "Udp segment length cannot be larger than the TCP wrapper ({udp_segment_len}/{tls_bytes_read})"
             );
 
             let udp_segment_no_tcp_prefix = &response_buf[offset + 2..offset + udp_segment_len + 2];
@@ -347,7 +347,7 @@ async fn handle_reads(
 
             offset += udp_segment_len + 2;
 
-            if offset == read_bytes_tcp {
+            if offset == tls_bytes_read {
                break;
             }
          }
