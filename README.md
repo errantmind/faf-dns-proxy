@@ -4,6 +4,24 @@
 
 FaF has been tested on Linux and Windows and may work on other platforms as well.
 
+
+```
+                                   ┌─────────────────┐
+                                   │                 │
+                                ┌─►│ Upstream DNS #1 │
+┌────────┐    ┌───────────────┐ │  │                 │
+│        ├───►│               ├─┘  └────────┬────────┘
+│ Device │    │ faf-dns-proxy │             │...
+│        │◄───┤               ├─┐  ┌────────┴────────┐
+└────────┘    └───────────────┘ │  │                 │
+                      ▲         └─►│ Upstream DNS #n │
+                      │            │                 │
+                      │            └────────┬────────┘
+                      │                     │
+                      └─────────────────────┘
+                            <fastest>
+```
+
 ## Why Use This?
 
 - You want the fastest DNS resolution available because you notice it speeds up your web browsing experience, among other areas.
