@@ -367,10 +367,9 @@ async fn connect(
       let tcp_stream = match tokio::net::TcpStream::connect(upstream_dns.socket_addr).await {
          Ok(conn) => conn,
          Err(err) => {
-            println!("{err}");
             connection_failures += 1;
-            if crate::util::is_power_of_2(connection_failures) {
-               println!("failed {}x times connecting to: {}", connection_failures, upstream_dns.socket_addr);
+            if connection_failures > 1 && crate::util::is_power_of_2(connection_failures) {
+               println!("failed {connection_failures}x times connecting to: {} with error: {}", upstream_dns.socket_addr, err);
             }
             tokio::time::sleep(tokio::time::Duration::from_millis(CONN_ERROR_SLEEP_MS)).await;
             continue;
@@ -384,10 +383,9 @@ async fn connect(
          match tls_connector.connect(tokio_rustls::rustls::ServerName::try_from(upstream_dns.server_name).unwrap(), tcp_stream).await {
             Ok(stream) => stream,
             Err(err) => {
-               println!("{err}");
                tls_failures += 1;
-               if crate::util::is_power_of_2(tls_failures) {
-                  println!("failed {}x times establishing tls connection to: {}", tls_failures, upstream_dns.socket_addr);
+               if tls_failures > 1 && crate::util::is_power_of_2(tls_failures) {
+                  println!("failed {tls_failures}x times establishing tls connection to: {} with error: {}", upstream_dns.socket_addr, err);
                }
                tokio::time::sleep(tokio::time::Duration::from_millis(CONN_ERROR_SLEEP_MS)).await;
                continue;
