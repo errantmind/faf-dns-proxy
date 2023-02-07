@@ -15,6 +15,9 @@ incremental = true
 codegen-units = 256
 rpath = false
 
+[profile.dev.package."*"]
+opt-level = 3
+
 [profile.release]
 opt-level = 3
 panic = 'abort'
@@ -37,6 +40,12 @@ lazy_static = "*"
 once_cell = "*"
 webpki-roots = "*"
 hashbrown = { version = "*", default-features = true, features = ["inline-more", "ahash"] }
+
+# faster hasher for keys that are particular primitives
+nohash-hasher = "*"
+
+# faster channel
+kanal = "0.1.0-pre8"
 
 # async runtime/executor
 tokio = { version = "*", features = ["rt-multi-thread", "net", "io-util", "time", "macros", "parking_lot", "sync"] }

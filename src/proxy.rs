@@ -27,7 +27,7 @@ struct TimingCacheEntry {
 
 struct AnswerCacheEntry {
    answer: Vec<u8>,
-   _elapsed_ms: u128,
+   elapsed_ms: u128,
    expires_at: u64,
 }
 
@@ -44,7 +44,8 @@ lazy_static::lazy_static! {
    // timing collisions but they should be very rare. There is a 1 / 2^16 chance of a collision, but even then
    // only if the requests arrive around the exact same time with the same id. Note, cached responses are not
    // affected by this, which makes the odds even lower.
-   static ref BUF_ID_ROUTER: tokio::sync::Mutex<HashMap<u16, std::net::SocketAddr>> = tokio::sync::Mutex::new(HashMap::default());
+   static ref BUF_ID_ROUTER: tokio::sync::Mutex<HashMap<u16, std::net::SocketAddr, nohash_hasher::BuildNoHashHasher<u16>>> =
+      tokio::sync::Mutex::new(HashMap::default());
 
 }
 
@@ -56,7 +57,7 @@ pub async fn go(port: u16) {
       let mut tx_channels = Vec::with_capacity(crate::statics::DNS_SERVERS.len());
 
       for (dns_server_index, _) in crate::statics::DNS_SERVERS.iter().enumerate() {
-         let (tx, rx) = tokio::sync::mpsc::channel(8192);
+         let (tx, rx) = kanal::bounded_async(8192);
          tokio::task::spawn(upstream_tls_handler(rx, dns_server_index, listener_socket.clone()));
          tx_channels.push(tx);
       }
@@ -98,7 +99,15 @@ pub async fn go(port: u16) {
                   if !crate::statics::ARGS.daemon {
                      cache_hits += 1;
                      if cache_hits >= 16 && crate::util::is_power_of_2(cache_hits) {
-                        println!("cache hits: {cache_hits_print_threshold}");
+                        let mut elapsed_ms_vec: Vec<u64> = answer_cache_guard.values().map(|x| x.elapsed_ms as u64).collect();
+                        if elapsed_ms_vec.len() > 25 {
+                           elapsed_ms_vec.sort_unstable();
+                           let median = elapsed_ms_vec[elapsed_ms_vec.len() / 2];
+                           println!(
+                              "cache hits: {cache_hits_print_threshold}, median uncached query time: {median}ms, lowest: {}ms",
+                              elapsed_ms_vec[0]
+                           );
+                        }
                         cache_hits_print_threshold <<= 1;
                      }
                   }
@@ -137,7 +146,7 @@ pub async fn go(port: u16) {
 }
 
 pub async fn upstream_tls_handler(
-   msg_rx: tokio::sync::mpsc::Receiver<Vec<u8>>,
+   msg_rx: kanal::AsyncReceiver<Vec<u8>>,
    upstream_dns_index: usize,
    listener_addr: std::sync::Arc<tokio::net::UdpSocket>,
 ) {
@@ -185,10 +194,10 @@ pub async fn upstream_tls_handler(
 
 async fn handle_writes(
    mut write_half: tokio::io::WriteHalf<tokio_rustls::client::TlsStream<tokio::net::TcpStream>>,
-   mut msg_rx: tokio::sync::mpsc::Receiver<Vec<u8>>,
+   msg_rx: kanal::AsyncReceiver<Vec<u8>>,
    unsent_previous_query_maybe: Option<Vec<u8>>,
    mut shutdown_writer_rx: tokio::sync::oneshot::Receiver<bool>,
-) -> (tokio::sync::mpsc::Receiver<Vec<u8>>, Option<Vec<u8>>) {
+) -> (kanal::AsyncReceiver<Vec<u8>>, Option<Vec<u8>>) {
    // In the event we had an issue previously, we begin by resuming the previous failed request
    if let Some(unsent_previous_query) = unsent_previous_query_maybe {
       if let Some(unsent_data) = write(&mut write_half, unsent_previous_query).await {
@@ -209,7 +218,7 @@ async fn handle_writes(
          },
          query_msg = msg_rx.recv() => {
             match query_msg {
-               Some(data) => match write(&mut write_half, data).await {
+               Ok(data) => match write(&mut write_half, data).await {
                   Some(unsent_data) => {
                      // Qeury failed
                      return (msg_rx, Some(unsent_data))
@@ -219,7 +228,7 @@ async fn handle_writes(
                      continue;
                   }
                },
-               None => panic!("Query channel has been closed prematurely")
+               Err(_) => panic!("Query channel has been closed prematurely")
             }
          }
       }
@@ -316,7 +325,7 @@ async fn handle_reads(
                         cache_key.to_vec(),
                         AnswerCacheEntry {
                            answer: udp_segment_no_tcp_prefix.to_vec(),
-                           _elapsed_ms: elapsed_ms,
+                           elapsed_ms,
                            expires_at: current_unix_timestamp_secs + ttl,
                         },
                      );
