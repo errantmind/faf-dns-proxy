@@ -20,6 +20,7 @@ An example of the default (non-daemon) output, which gives some immediate insigh
 ## Features
 
 - Full-duplex async design
+- Minimal parsing of DNS records to lower overhead
 - 'Shotgun' DNS queries to multiple upstream resolvers by default. The first reply wins.
 - Caching of DNS answers (using the TTL on the answer), with optional minimum TTL override.
 - TLS Session Caching (to avoid a full handshake when (re)connecting to upstream resolvers).
