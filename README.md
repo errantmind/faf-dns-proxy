@@ -6,6 +6,8 @@ FaF has been tested on Linux and Windows and may work on other platforms as well
 
 ![](diagram.png)
 
+![Non-Daemon Output Example](output.png)
+
 ## Why Use This?
 
 - You want the fastest DNS resolution available because you notice it speeds up your web browsing experience, among other areas.
