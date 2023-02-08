@@ -47,6 +47,10 @@ At a basic level:
 4. If it is not in the cache, FaF encrypts your request and sends it to (one or more) upstream DNS resolvers.
 5. Upon receiving a response from an upstream DNS resolver, FaF answers your device's original query.
 
+## Configuration
+
+There is no configuration file as the defaults will serve most users well. If you want to add / edit the default upstream DNS providers, or the TTL override, make the necessary changes in the source file `statics.rs`.
+
 ## How To Use This (Linux)?
 
 1. Clone this repository and build it using `cargo +nightly build --release`.

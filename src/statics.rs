@@ -37,4 +37,4 @@ pub const DNS_SERVERS: [UpstreamDnsServer; 5] = [
 
 /// Overrides TTL on DNS records to the value specified, if DNS record has a value lower than the value specified.
 /// To disable, set the value below to 0.
-pub const MINIMUM_TTL_OVERRIDE: u64 = 7200;
+pub const MINIMUM_TTL_OVERRIDE: u64 = 300;
