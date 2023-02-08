@@ -4,22 +4,7 @@
 
 FaF has been tested on Linux and Windows and may work on other platforms as well.
 
-```
-                                                ┌─────────────────┐
-                                                │                 │
-                                             ┌─►│ Upstream DNS #1 │
-┌────────┐  Dns Question   ┌───────────────┐ │  │                 │
-│        ├────────────────►│               ├─┘  └────────┬────────┘
-│ Device │                 │ faf-dns-proxy │             │...
-│        │◄────────────────┤               ├─┐  ┌────────┴────────┐
-└────────┘     Dns Answer  └───────────────┘ │  │                 │
-                                   ▲         └─►│ Upstream DNS #n │
-                                   │            │                 │
-                                   │            └────────┬────────┘
-                                   │                     │
-                                   └─────────────────────┘
-                                         <fastest>
-```
+![](diagram.png)
 
 ## Why Use This?
 
