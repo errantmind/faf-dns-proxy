@@ -6,6 +6,8 @@ FaF has been tested on Linux and Windows and may work on other platforms as well
 
 ![](diagram.png)
 
+An example of the default (non-daemon) output, which gives some immediate insights into timings and upstream DNS resolver performance:
+
 ![Non-Daemon Output Example](output.png)
 
 ## Why Use This?
