@@ -1,6 +1,6 @@
 [package]
 name = "faf-dns-proxy"
-version = "0.5.3"
+version = "0.5.4"
 authors = ["James Bates <errantmind@protonmail.com>"]
 edition = "2021"
 
