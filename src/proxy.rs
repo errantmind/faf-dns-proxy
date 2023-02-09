@@ -35,10 +35,10 @@ const CONN_ERROR_SLEEP_MS: u64 = 1000;
 
 lazy_static::lazy_static! {
    static ref DNS_TIMING_CACHE: tokio::sync::Mutex<HashMap<Vec<u8>, TimingCacheEntry>> =
-   tokio::sync::Mutex::new(HashMap::default());
+   tokio::sync::Mutex::new(HashMap::with_capacity(4096));
 
    static ref DNS_ANSWER_CACHE: tokio::sync::Mutex<HashMap<Vec<u8>, AnswerCacheEntry>> =
-   tokio::sync::Mutex::new(HashMap::default());
+   tokio::sync::Mutex::new(HashMap::with_capacity(4096));
 
    // We route DNS responses by the id they provided in the initial request. This may occasionally cause
    // timing collisions but they should be very rare. There is a 1 / 2^16 chance of a collision, but even then
