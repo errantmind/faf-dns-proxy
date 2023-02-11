@@ -2,7 +2,7 @@
 
 `FaF DNS Proxy` is a cross-platform, encrypted DNS (DoT) proxy / forwarder written in Rust. It follows the general design philosophy of the [FaF Web Server](https://www.github.com/errantmind/faf).
 
-FaF has been tested on Linux, Mac, and Windows, and may work on other platforms as well.
+FaF has been tested on Linux, Mac (M1), and Windows, and may work on other platforms as well.
 
 ![](diagram.png)
 
@@ -70,11 +70,10 @@ options no-check-names
 ## How To Use This (Windows)?
 
 1. Clone this repository and build it using `cargo +nightly build --release`.
-2. Navigate to your system's network settings and change your system's primary DNS resolver to 127.0.0.1. Leave the 'alternative' empty.
-3. Open Powershell with administrator privileges (so it can listen on port 53 (DNS)) and run the newly built binary.
-4. Navigate to some websites to check and see if it is working. You should see resolution information for each website you visit in the Powershell window. If you don't, you may need to disable your brower's built-in DNS proxying service. This is usually in your brower's network settings and may be called `DoH` or `DNS over HTTPS`.
-5. If it is working, you can add a shortcut to the binary to your startup folder.
-6. If your linux distro uses systemd, check out the example service in this repo to enable it to run on boot. You'll probably want to copy the `faf-dns-proxy` binary somewhere first.
+2. Open Powershell and run the newly built binary. It should not require elevated privileges, but you may need to run Powershell as administrator on some versions of Windows.
+3. Navigate to your system's network settings and change your system's primary DNS resolver to 127.0.0.1. Leave the 'alternative' empty.
+4. Browse some websites to check and see if it is working. You should see resolution information for each website you visit in the Powershell window. If you don't, you may need to disable your brower's built-in DNS proxying service. This is usually in your brower's network settings and may be called `DoH` or `DNS over HTTPS`.
+5. If it is working, you can script it to run at startup.
 
 If you have a problem, and suddenly realize you can't search the internet for answers anymore because your DNS is broken, undo the changes to your system's DNS settings.
 
