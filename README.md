@@ -2,7 +2,7 @@
 
 `FaF DNS Proxy` is a cross-platform, encrypted DNS (DoT) proxy / forwarder written in Rust. It follows the general design philosophy of the [FaF Web Server](https://www.github.com/errantmind/faf).
 
-FaF has been tested on Linux and Windows and may work on other platforms as well.
+FaF has been tested on Linux, Mac, and Windows, and may work on other platforms as well.
 
 ![](diagram.png)
 

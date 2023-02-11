@@ -80,7 +80,7 @@ pub async fn go(port: u16) {
          assert!(read_bytes <= 512, "Received a datagram with > 512 bytes on the UDP socket");
          let udp_segment = &query_buf[2..read_bytes + 2];
 
-         let id = crate::dns::get_id(udp_segment.as_ptr(), udp_segment.len());
+         let id = crate::dns::get_id_network_byte_order(udp_segment.as_ptr(), udp_segment.len());
          let cache_key = crate::dns::get_query_unique_id(udp_segment.as_ptr(), udp_segment.len());
 
          {
@@ -92,7 +92,7 @@ pub async fn go(port: u16) {
 
             if let Some(cached_response) = cached_response_maybe {
                if cached_response.expires_at > crate::util::get_unix_ts_secs() {
-                  crate::dns::set_id_big_endian(id, &mut cached_response.answer);
+                  crate::dns::set_id_network_byte_order(id, &mut cached_response.answer);
                   let wrote = listener_socket.send_to(&cached_response.answer, &client_addr).await.unwrap();
                   assert!(wrote != 0, "Wrote nothing to client after fetching data from cache");
 
@@ -295,7 +295,7 @@ async fn handle_reads(
             // Scope for guards
             {
                {
-                  let id = crate::dns::get_id(udp_segment_no_tcp_prefix.as_ptr(), udp_segment_no_tcp_prefix.len());
+                  let id = crate::dns::get_id_network_byte_order(udp_segment_no_tcp_prefix.as_ptr(), udp_segment_no_tcp_prefix.len());
                   let cache_key = crate::dns::get_query_unique_id(udp_segment_no_tcp_prefix.as_ptr(), udp_segment_no_tcp_prefix.len());
                   let mut cache_guard = DNS_ANSWER_CACHE.lock().await;
                   if !cache_guard.contains_key(cache_key) {

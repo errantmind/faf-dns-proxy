@@ -19,13 +19,13 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 // DNS packet structure reference: https://mislove.org/teaching/cs4700/spring11/handouts/project1-primer.pdf
 
 #[inline]
-pub fn get_id(dns_buf_start: *const u8, len: usize) -> u16 {
+pub fn get_id_network_byte_order(dns_buf_start: *const u8, len: usize) -> u16 {
    debug_assert!(len >= 2);
    unsafe { *(dns_buf_start as *const u16) }
 }
 
 #[inline]
-pub fn set_id_big_endian(new_id: u16, input: &mut [u8]) {
+pub fn set_id_network_byte_order(new_id: u16, input: &mut [u8]) {
    debug_assert!(input.len() >= 2);
    unsafe { *(input as *mut _ as *mut u16) = new_id };
 }
@@ -33,8 +33,8 @@ pub fn set_id_big_endian(new_id: u16, input: &mut [u8]) {
 #[inline]
 pub fn get_tcp_dns_size_prefix_le(input: &[u8]) -> usize {
    debug_assert!(input.len() >= 2);
-   let size_be = unsafe { *(input as *const _ as *const u16) };
-   u16::swap_bytes(size_be) as usize
+   let size_network_byte_order = unsafe { *(input as *const _ as *const u16) };
+   u16::swap_bytes(size_network_byte_order) as usize
 }
 
 /// Walks one question in the query (QNAME, QTYPE, QCLASS) and returns these bytes a slice of the buffer
