@@ -48,6 +48,6 @@ nohash-hasher = "*"
 kanal = "0.1.0-pre8"
 
 # async runtime/executor
-tokio = { version = "*", features = ["rt-multi-thread", "net", "io-util", "time", "macros", "parking_lot", "sync"] }
+tokio = { version = "*", features = ["rt-multi-thread", "net", "io-util", "time", "macros", "sync"] }
 tokio-rustls = { version = "*", features = ["default", "early-data"] }
 
