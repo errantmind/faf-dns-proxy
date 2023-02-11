@@ -23,6 +23,6 @@ use clap::Parser;
 #[clap(author, version, about, long_about = None)]
 pub struct Args {
    /// [optional] daemon mode, no logging output
-   #[clap(long)]
+   #[clap(short, long)]
    pub daemon: bool,
 }
