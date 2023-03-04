@@ -308,6 +308,8 @@ async fn handle_reads(
                         panic!("Wrote nothing to client after receiving data from upstream")
                      }
 
+                     let elapsed_ms = crate::util::get_unix_ts_millis() - DNS_TIMING_CACHE.lock().await.get(cache_key).unwrap().asked_at;
+
                      let (site_name, mut ttl) = crate::dns::get_question_as_string_and_lowest_ttl(
                         udp_segment_no_tcp_prefix.as_ptr(),
                         udp_segment_no_tcp_prefix.len(),
@@ -317,16 +319,12 @@ async fn handle_reads(
                         ttl = crate::statics::MINIMUM_TTL_OVERRIDE;
                      }
 
-                     let elapsed_ms = crate::util::get_unix_ts_millis() - DNS_TIMING_CACHE.lock().await.get(cache_key).unwrap().asked_at;
-
-                     let current_unix_timestamp_secs = crate::util::get_unix_ts_secs();
-
                      cache_guard.insert(
                         cache_key.to_vec(),
                         AnswerCacheEntry {
                            answer: udp_segment_no_tcp_prefix.to_vec(),
                            elapsed_ms,
-                           expires_at: current_unix_timestamp_secs + ttl,
+                           expires_at: crate::util::get_unix_ts_secs() + ttl,
                         },
                      );
 

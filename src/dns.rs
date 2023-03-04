@@ -125,7 +125,14 @@ pub fn get_question_as_string_and_lowest_ttl(dns_buf_start: *const u8, len: usiz
             // A pointer has been specified so skip the 2 byte section (pointer specified and offset), the TYPE and CLASS
             dns_qname_qtype_qclass_walker = dns_qname_qtype_qclass_walker.add(6);
          } else {
-            panic!("parse malfunction for {question_str}");
+            // I've noticed this is hit for 'cdn.fluidpreview.office.net'
+            println!(
+               "          {} parse malfunction. DNS may be misconfigured for this domain. TTL could not be determined, using {}s",
+               question_str,
+               crate::statics::MINIMUM_TTL_OVERRIDE
+            );
+
+            return (question_str, 500);
          }
 
          let size_be = *(dns_qname_qtype_qclass_walker as *const _ as *const u32);
