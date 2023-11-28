@@ -299,13 +299,17 @@ async fn handle_reads(
                   let cache_key = crate::dns::get_query_unique_id(udp_segment_no_tcp_prefix.as_ptr(), udp_segment_no_tcp_prefix.len());
                   let mut cache_guard = DNS_ANSWER_CACHE.lock().await;
                   if !cache_guard.contains_key(cache_key) {
-                     let id_router_guard = BUF_ID_ROUTER.lock().await;
-                     let saved_addr = id_router_guard.get(&id).unwrap();
+                     {
+                        // Scope for id_router_guard
 
-                     let wrote = listener_addr.send_to(udp_segment_no_tcp_prefix, &saved_addr).await.unwrap();
+                        let id_router_guard = BUF_ID_ROUTER.lock().await;
+                        let saved_addr = id_router_guard.get(&id).unwrap();
 
-                     if wrote == 0 {
-                        panic!("Wrote nothing to client after receiving data from upstream")
+                        let wrote = listener_addr.send_to(udp_segment_no_tcp_prefix, &saved_addr).await.unwrap();
+
+                        if wrote == 0 {
+                           panic!("Wrote nothing to client after receiving data from upstream")
+                        }
                      }
 
                      let elapsed_ms = crate::util::get_unix_ts_millis() - DNS_TIMING_CACHE.lock().await.get(cache_key).unwrap().asked_at;
