@@ -16,12 +16,14 @@ You should have received a copy of the GNU Affero General Public License
 along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
+#![feature(let_chains)]
+
 mod args;
 mod dns;
 mod proxy;
 mod resolver;
 mod statics;
-mod stats;
+//mod stats;
 mod tls;
 mod util;
 
@@ -34,7 +36,7 @@ pub fn main() {
       print_version();
    }
 
-   tokio::runtime::Runtime::new().unwrap().block_on(proxy::go(53));
+   tokio::runtime::Runtime::new().unwrap().block_on(proxy::go(resolver::Resolver::default(), 53));
 }
 
 fn print_banner() {

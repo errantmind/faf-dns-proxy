@@ -128,8 +128,7 @@ pub fn get_question_as_string_and_lowest_ttl(dns_buf_start: *const u8, len: usiz
             // I've noticed this is hit for 'cdn.fluidpreview.office.net'
             println!(
                "          {} parse malfunction. DNS may be misconfigured for this domain. TTL could not be determined, using {}s",
-               question_str,
-               crate::statics::MINIMUM_TTL_OVERRIDE
+               question_str, 500
             );
 
             return (question_str, 500);

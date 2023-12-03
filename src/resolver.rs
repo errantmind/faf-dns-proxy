@@ -24,5 +24,53 @@ pub struct UpstreamDnsServer {
 
 pub struct Resolver {
    servers: Vec<UpstreamDnsServer>,
-   min_ttl_override: Option<u64>
+
+   /// Overrides TTL on DNS records to the value specified, if DNS record has a value lower than the value specified.
+   /// To disable, set to `None`.
+   min_ttl_override: Option<u64>,
+}
+
+impl Resolver {
+   pub fn new(servers: Vec<UpstreamDnsServer>, min_ttl_override: Option<u64>) -> Self {
+      Self { servers, min_ttl_override }
+   }
+
+   pub fn get_default_servers() -> Vec<UpstreamDnsServer> {
+      vec![
+         UpstreamDnsServer {
+            server_name: "one.one.one.one",
+            socket_addr: std::net::SocketAddrV4::new(std::net::Ipv4Addr::new(1, 1, 1, 1), 853),
+         },
+         UpstreamDnsServer {
+            server_name: "one.one.one.one",
+            socket_addr: std::net::SocketAddrV4::new(std::net::Ipv4Addr::new(1, 0, 0, 1), 853),
+         },
+         UpstreamDnsServer {
+            server_name: "dns.google",
+            socket_addr: std::net::SocketAddrV4::new(std::net::Ipv4Addr::new(8, 8, 8, 8), 853),
+         },
+         UpstreamDnsServer {
+            server_name: "dns.google",
+            socket_addr: std::net::SocketAddrV4::new(std::net::Ipv4Addr::new(8, 8, 4, 4), 853),
+         },
+         UpstreamDnsServer {
+            server_name: "dns.quad9.net",
+            socket_addr: std::net::SocketAddrV4::new(std::net::Ipv4Addr::new(9, 9, 9, 9), 853),
+         },
+      ]
+   }
+
+   pub fn get_servers(&self) -> &Vec<UpstreamDnsServer> {
+      &self.servers
+   }
+
+   pub fn get_min_ttl_override(&self) -> Option<u64> {
+      self.min_ttl_override
+   }
+}
+
+impl Default for Resolver {
+   fn default() -> Self {
+      Self { servers: Self::get_default_servers(), min_ttl_override: None }
+   }
 }

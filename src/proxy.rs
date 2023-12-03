@@ -18,8 +18,8 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 use hashbrown::HashMap;
 
-static mut STATS: once_cell::sync::Lazy<[crate::stats::Stats; crate::statics::DNS_SERVERS.len()]> =
-   once_cell::sync::Lazy::new(crate::stats::init_stats);
+// static mut STATS: once_cell::sync::Lazy<[crate::stats::Stats; crate::statics::DNS_SERVERS.len()]> =
+//    once_cell::sync::Lazy::new(crate::stats::init_stats);
 
 struct TimingCacheEntry {
    asked_at: u128,
@@ -48,16 +48,16 @@ lazy_static::lazy_static! {
 static mut BUF_ID_ROUTER: [std::net::SocketAddr; u16::MAX as usize] =
    [std::net::SocketAddr::V4(std::net::SocketAddrV4::new(std::net::Ipv4Addr::UNSPECIFIED, 0)); u16::MAX as usize];
 
-pub async fn go(port: u16) {
+pub async fn go(resolver: crate::resolver::Resolver, listener_port: u16) {
    tokio::task::spawn(async move {
-      let listener_addr = std::net::SocketAddrV4::new(std::net::Ipv4Addr::UNSPECIFIED, port);
+      let listener_addr = std::net::SocketAddrV4::new(std::net::Ipv4Addr::UNSPECIFIED, listener_port);
       let listener_socket = std::sync::Arc::new(tokio::net::UdpSocket::bind(listener_addr).await.unwrap());
 
-      let mut tx_channels = Vec::with_capacity(crate::statics::DNS_SERVERS.len());
+      let mut tx_channels = Vec::with_capacity(resolver.get_servers().len());
 
-      for (dns_server_index, _) in crate::statics::DNS_SERVERS.iter().enumerate() {
+      for (server) in resolver.get_servers().iter() {
          let (tx, rx) = kanal::bounded_async(8192);
-         tokio::task::spawn(upstream_tls_handler(rx, dns_server_index, listener_socket.clone()));
+         tokio::task::spawn(upstream_dns_resolver(rx, server.clone(), resolver.get_min_ttl_override(), listener_socket.clone()));
          tx_channels.push(tx);
       }
 
@@ -141,23 +141,27 @@ pub async fn go(port: u16) {
    .unwrap();
 }
 
-pub async fn upstream_tls_handler(
+pub async fn upstream_dns_resolver(
    msg_rx: kanal::AsyncReceiver<Vec<u8>>,
-   upstream_dns_index: usize,
+   dns_server: crate::resolver::UpstreamDnsServer,
+   min_ttl_override_maybe: Option<u64>,
    listener_addr: std::sync::Arc<tokio::net::UdpSocket>,
 ) {
    let tls_client_config = crate::tls::get_tls_client_config();
    let tls_connector = tokio_rustls::TlsConnector::from(std::sync::Arc::new(tls_client_config)).early_data(true);
 
-   let upstream_dns = crate::statics::DNS_SERVERS[upstream_dns_index];
-
    let (mut shutdown_writer_tx, mut shutdown_writer_rx) = tokio::sync::oneshot::channel();
    let (mut shutdown_reader_tx, mut shutdown_reader_rx) = tokio::sync::oneshot::channel();
-   let mut tls_stream = connect(&tls_connector, &upstream_dns).await;
+   let mut tls_stream = connect(&tls_connector, &dns_server).await;
    let mut tls_stream_split = tokio::io::split(tls_stream);
    let mut write_handle = tokio::task::spawn(handle_writes(tls_stream_split.1, msg_rx, None, shutdown_writer_rx));
-   let mut read_handle =
-      tokio::task::spawn(handle_reads(tls_stream_split.0, upstream_dns_index, listener_addr.clone(), shutdown_reader_rx));
+   let mut read_handle = tokio::task::spawn(handle_reads(
+      tls_stream_split.0,
+      dns_server.clone(),
+      min_ttl_override_maybe,
+      listener_addr.clone(),
+      shutdown_reader_rx,
+   ));
 
    loop {
       let (msg_rx, unsent_query) = tokio::select! {
@@ -181,10 +185,16 @@ pub async fn upstream_tls_handler(
 
       (shutdown_writer_tx, shutdown_writer_rx) = tokio::sync::oneshot::channel();
       (shutdown_reader_tx, shutdown_reader_rx) = tokio::sync::oneshot::channel();
-      tls_stream = connect(&tls_connector, &upstream_dns).await;
+      tls_stream = connect(&tls_connector, &dns_server).await;
       tls_stream_split = tokio::io::split(tls_stream);
       write_handle = tokio::task::spawn(handle_writes(tls_stream_split.1, msg_rx, unsent_query, shutdown_writer_rx));
-      read_handle = tokio::task::spawn(handle_reads(tls_stream_split.0, upstream_dns_index, listener_addr.clone(), shutdown_reader_rx));
+      read_handle = tokio::task::spawn(handle_reads(
+         tls_stream_split.0,
+         dns_server.clone(),
+         min_ttl_override_maybe,
+         listener_addr.clone(),
+         shutdown_reader_rx,
+      ));
    }
 }
 
@@ -249,7 +259,8 @@ async fn write(
 
 async fn handle_reads(
    mut read_half: tokio::io::ReadHalf<tokio_rustls::client::TlsStream<tokio::net::TcpStream>>,
-   upstream_dns_index: usize,
+   dns_server: crate::resolver::UpstreamDnsServer,
+   min_ttl_override_maybe: Option<u64>,
    listener_addr: std::sync::Arc<tokio::net::UdpSocket>,
    mut shutdown_reader_rx: tokio::sync::oneshot::Receiver<bool>,
 ) {
@@ -314,8 +325,8 @@ async fn handle_reads(
                         udp_segment_no_tcp_prefix.len(),
                      );
 
-                     if ttl < crate::statics::MINIMUM_TTL_OVERRIDE {
-                        ttl = crate::statics::MINIMUM_TTL_OVERRIDE;
+                     if let Some(min_ttl_override) = min_ttl_override_maybe && ttl < min_ttl_override {
+                        ttl = min_ttl_override;
                      }
 
                      cache_guard.insert(
@@ -327,18 +338,18 @@ async fn handle_reads(
                         },
                      );
 
-                     unsafe {
-                        if !crate::statics::ARGS.daemon {
-                           let fastest_count = crate::stats::Stats::array_increment_fastest(STATS.as_mut(), upstream_dns_index);
-                           println!(
-                              "{:>4}ms -> {} ({} [{}])",
-                              elapsed_ms,
-                              site_name,
-                              format!("{}", crate::statics::DNS_SERVERS[upstream_dns_index].socket_addr.ip()).as_str(),
-                              fastest_count
-                           );
-                        }
-                     }
+                     // unsafe {
+                     //    if !crate::statics::ARGS.daemon {
+                     //       let fastest_count = crate::stats::Stats::array_increment_fastest(STATS.as_mut(), upstream_dns_index);
+                     //       println!(
+                     //          "{:>4}ms -> {} ({} [{}])",
+                     //          elapsed_ms,
+                     //          site_name,
+                     //          format!("{}", dns_server.socket_addr.ip()).as_str(),
+                     //          fastest_count
+                     //       );
+                     //    }
+                     // }
                   }
                }
             }
