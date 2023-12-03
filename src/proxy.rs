@@ -55,9 +55,9 @@ pub async fn go(resolver: crate::resolver::Resolver, listener_port: u16) {
 
       let mut tx_channels = Vec::with_capacity(resolver.get_servers().len());
 
-      for (server) in resolver.get_servers().iter() {
+      for server in resolver.get_servers() {
          let (tx, rx) = kanal::bounded_async(8192);
-         tokio::task::spawn(upstream_dns_resolver(rx, server.clone(), resolver.get_min_ttl_override(), listener_socket.clone()));
+         tokio::task::spawn(upstream_dns_resolver(rx, *server, resolver.get_min_ttl_override(), listener_socket.clone()));
          tx_channels.push(tx);
       }
 
@@ -155,13 +155,8 @@ pub async fn upstream_dns_resolver(
    let mut tls_stream = connect(&tls_connector, &dns_server).await;
    let mut tls_stream_split = tokio::io::split(tls_stream);
    let mut write_handle = tokio::task::spawn(handle_writes(tls_stream_split.1, msg_rx, None, shutdown_writer_rx));
-   let mut read_handle = tokio::task::spawn(handle_reads(
-      tls_stream_split.0,
-      dns_server.clone(),
-      min_ttl_override_maybe,
-      listener_addr.clone(),
-      shutdown_reader_rx,
-   ));
+   let mut read_handle =
+      tokio::task::spawn(handle_reads(tls_stream_split.0, dns_server, min_ttl_override_maybe, listener_addr.clone(), shutdown_reader_rx));
 
    loop {
       let (msg_rx, unsent_query) = tokio::select! {
@@ -190,7 +185,7 @@ pub async fn upstream_dns_resolver(
       write_handle = tokio::task::spawn(handle_writes(tls_stream_split.1, msg_rx, unsent_query, shutdown_writer_rx));
       read_handle = tokio::task::spawn(handle_reads(
          tls_stream_split.0,
-         dns_server.clone(),
+         dns_server,
          min_ttl_override_maybe,
          listener_addr.clone(),
          shutdown_reader_rx,
@@ -337,6 +332,9 @@ async fn handle_reads(
                            expires_at: crate::util::get_unix_ts_secs() + ttl,
                         },
                      );
+
+                     // Temporary, until we have a better way to display stats without global state
+                     println!("{:>4}ms -> {} ({})", elapsed_ms, site_name, format!("{}", dns_server.socket_addr.ip()).as_str(),);
 
                      // unsafe {
                      //    if !crate::statics::ARGS.daemon {
