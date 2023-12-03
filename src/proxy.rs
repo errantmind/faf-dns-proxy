@@ -39,15 +39,14 @@ lazy_static::lazy_static! {
 
    static ref DNS_ANSWER_CACHE: tokio::sync::Mutex<HashMap<Vec<u8>, AnswerCacheEntry>> =
    tokio::sync::Mutex::new(HashMap::with_capacity(4096));
-
-   // We route DNS responses by the id they provided in the initial request. This may occasionally cause
-   // timing collisions but they should be very rare. There is a 1 / 2^16 chance of a collision, but even then
-   // only if the requests arrive around the exact same time with the same id. Note, cached responses are not
-   // affected by this, which makes the odds even lower.
-   static ref BUF_ID_ROUTER: tokio::sync::Mutex<HashMap<u16, std::net::SocketAddr, nohash_hasher::BuildNoHashHasher<u16>>> =
-      tokio::sync::Mutex::new(HashMap::default());
-
 }
+
+// We route DNS responses by the id they provided in the initial request. This may occasionally cause
+// timing collisions but they should be very rare. There is a 1 / 2^16 chance of a collision, but even then
+// only if the requests arrive around the exact same time with the same id. Note, cached responses are not
+// affected by this, which makes the odds even lower.
+static mut BUF_ID_ROUTER: [std::net::SocketAddr; u16::MAX as usize] =
+   [std::net::SocketAddr::V4(std::net::SocketAddrV4::new(std::net::Ipv4Addr::UNSPECIFIED, 0)); u16::MAX as usize];
 
 pub async fn go(port: u16) {
    tokio::task::spawn(async move {
@@ -125,11 +124,8 @@ pub async fn go(port: u16) {
             DNS_TIMING_CACHE.lock().await.insert(cache_key.to_vec(), TimingCacheEntry { asked_at: crate::util::get_unix_ts_millis() });
          }
 
-         {
-            // Save the client state
-
-            BUF_ID_ROUTER.lock().await.insert(id, client_addr);
-         }
+         // Save the client state
+         unsafe { BUF_ID_ROUTER[id as usize] = client_addr };
 
          // Write both bytes at once after converting to Big Endian
          unsafe { *(query_buf.as_mut_ptr() as *mut u16) = (read_bytes as u16).to_be() };
@@ -302,8 +298,7 @@ async fn handle_reads(
                      {
                         // Scope for id_router_guard
 
-                        let id_router_guard = BUF_ID_ROUTER.lock().await;
-                        let saved_addr = id_router_guard.get(&id).unwrap();
+                        let saved_addr = unsafe { BUF_ID_ROUTER[id as usize] };
 
                         let wrote = listener_addr.send_to(udp_segment_no_tcp_prefix, &saved_addr).await.unwrap();
 
@@ -371,7 +366,7 @@ async fn connect(
          Err(err) => {
             connection_failures += 1;
             if connection_failures > 1 && crate::util::is_power_of_2(connection_failures) {
-               println!("failed {connection_failures}x times connecting to: {} with error: {}", upstream_dns.socket_addr, err);
+               eprintln!("failed {connection_failures}x times connecting to: {} with error: {}", upstream_dns.socket_addr, err);
             }
             tokio::time::sleep(tokio::time::Duration::from_millis(CONN_ERROR_SLEEP_MS)).await;
             continue;
@@ -387,7 +382,7 @@ async fn connect(
             Err(err) => {
                tls_failures += 1;
                if tls_failures > 1 && crate::util::is_power_of_2(tls_failures) {
-                  println!("failed {tls_failures}x times establishing tls connection to: {} with error: {}", upstream_dns.socket_addr, err);
+                  eprintln!("failed {tls_failures}x times establishing tls connection to: {} with error: {}", upstream_dns.socket_addr, err);
                }
                tokio::time::sleep(tokio::time::Duration::from_millis(CONN_ERROR_SLEEP_MS)).await;
                continue;

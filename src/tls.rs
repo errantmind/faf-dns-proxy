@@ -19,11 +19,13 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #[inline]
 pub fn get_tls_client_config() -> tokio_rustls::rustls::ClientConfig {
    let mut root_cert_store = tokio_rustls::rustls::RootCertStore::empty();
-   root_cert_store.add_trust_anchors(
-      webpki_roots::TLS_SERVER_ROOTS
-         .iter()
-         .map(|ta| tokio_rustls::rustls::OwnedTrustAnchor::from_subject_spki_name_constraints(ta.subject, ta.spki, ta.name_constraints)),
-   );
+   root_cert_store.add_trust_anchors(webpki_roots::TLS_SERVER_ROOTS.iter().map(|ta| {
+      tokio_rustls::rustls::OwnedTrustAnchor::from_subject_spki_name_constraints(
+         ta.subject.to_vec(),
+         ta.subject_public_key_info.to_vec(),
+         ta.name_constraints.as_ref().map(|x| x.to_vec()),
+      )
+   }));
 
    let mut config = tokio_rustls::rustls::ClientConfig::builder()
       .with_safe_defaults()
