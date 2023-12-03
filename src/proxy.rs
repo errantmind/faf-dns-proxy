@@ -355,7 +355,7 @@ async fn handle_reads(
 
 async fn connect(
    tls_connector: &tokio_rustls::TlsConnector,
-   upstream_dns: &crate::statics::UpstreamDnsServer,
+   upstream_dns: &crate::resolver::UpstreamDnsServer,
 ) -> tokio_rustls::client::TlsStream<tokio::net::TcpStream> {
    let mut connection_failures = 0;
    let mut tls_failures = 0;
@@ -376,18 +376,20 @@ async fn connect(
       let _ = tcp_stream.set_linger(None);
       let _ = tcp_stream.set_nodelay(true);
 
-      let tls_stream =
-         match tls_connector.connect(tokio_rustls::rustls::ServerName::try_from(upstream_dns.server_name).unwrap(), tcp_stream).await {
-            Ok(stream) => stream,
-            Err(err) => {
-               tls_failures += 1;
-               if tls_failures > 1 && crate::util::is_power_of_2(tls_failures) {
-                  eprintln!("failed {tls_failures}x times establishing tls connection to: {} with error: {}", upstream_dns.socket_addr, err);
-               }
-               tokio::time::sleep(tokio::time::Duration::from_millis(CONN_ERROR_SLEEP_MS)).await;
-               continue;
+      let tls_stream = match tls_connector
+         .connect(tokio_rustls::rustls::ServerName::try_from(upstream_dns.server_name).unwrap(), tcp_stream)
+         .await
+      {
+         Ok(stream) => stream,
+         Err(err) => {
+            tls_failures += 1;
+            if tls_failures > 1 && crate::util::is_power_of_2(tls_failures) {
+               eprintln!("failed {tls_failures}x times establishing tls connection to: {} with error: {}", upstream_dns.socket_addr, err);
             }
-         };
+            tokio::time::sleep(tokio::time::Duration::from_millis(CONN_ERROR_SLEEP_MS)).await;
+            continue;
+         }
+      };
 
       break tls_stream;
    }

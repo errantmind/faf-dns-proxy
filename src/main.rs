@@ -19,6 +19,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 mod args;
 mod dns;
 mod proxy;
+mod resolver;
 mod statics;
 mod stats;
 mod tls;
