@@ -48,7 +48,7 @@ lazy_static::lazy_static! {
 static mut BUF_ID_ROUTER: [std::net::SocketAddr; u16::MAX as usize] =
    [std::net::SocketAddr::V4(std::net::SocketAddrV4::new(std::net::Ipv4Addr::UNSPECIFIED, 0)); u16::MAX as usize];
 
-pub async fn go(resolver: crate::resolver::Resolver, listener_port: u16) {
+pub async fn go(resolver: crate::resolver_config::ResolverConfig, listener_port: u16) {
    tokio::task::spawn(async move {
       let listener_addr = std::net::SocketAddrV4::new(std::net::Ipv4Addr::UNSPECIFIED, listener_port);
       let listener_socket = std::sync::Arc::new(tokio::net::UdpSocket::bind(listener_addr).await.unwrap());
@@ -143,7 +143,7 @@ pub async fn go(resolver: crate::resolver::Resolver, listener_port: u16) {
 
 pub async fn upstream_dns_resolver(
    msg_rx: kanal::AsyncReceiver<Vec<u8>>,
-   dns_server: crate::resolver::UpstreamDnsServer,
+   dns_server: crate::resolver_config::UpstreamDnsServer,
    min_ttl_override_maybe: Option<u64>,
    listener_addr: std::sync::Arc<tokio::net::UdpSocket>,
 ) {
@@ -254,7 +254,7 @@ async fn write(
 
 async fn handle_reads(
    mut read_half: tokio::io::ReadHalf<tokio_rustls::client::TlsStream<tokio::net::TcpStream>>,
-   dns_server: crate::resolver::UpstreamDnsServer,
+   dns_server: crate::resolver_config::UpstreamDnsServer,
    min_ttl_override_maybe: Option<u64>,
    listener_addr: std::sync::Arc<tokio::net::UdpSocket>,
    mut shutdown_reader_rx: tokio::sync::oneshot::Receiver<bool>,
@@ -364,7 +364,7 @@ async fn handle_reads(
 
 async fn connect(
    tls_connector: &tokio_rustls::TlsConnector,
-   upstream_dns: &crate::resolver::UpstreamDnsServer,
+   upstream_dns: &crate::resolver_config::UpstreamDnsServer,
 ) -> tokio_rustls::client::TlsStream<tokio::net::TcpStream> {
    let mut connection_failures = 0;
    let mut tls_failures = 0;

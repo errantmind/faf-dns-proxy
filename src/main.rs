@@ -22,6 +22,7 @@ mod args;
 mod dns;
 mod proxy;
 mod resolver;
+mod resolver_config;
 mod statics;
 //mod stats;
 mod tls;
@@ -36,7 +37,7 @@ pub fn main() {
       print_version();
    }
 
-   tokio::runtime::Runtime::new().unwrap().block_on(proxy::go(resolver::Resolver::default(), 53));
+   tokio::runtime::Runtime::new().unwrap().block_on(proxy::go(resolver_config::ResolverConfig::default(), 53));
 }
 
 fn print_banner() {

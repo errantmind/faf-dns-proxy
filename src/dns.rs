@@ -18,8 +18,6 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 // DNS packet structure reference: https://mislove.org/teaching/cs4700/spring11/handouts/project1-primer.pdf
 
-use crate::dns;
-
 #[inline]
 pub fn get_id_network_byte_order(dns_buf_start: *const u8, len: usize) -> u16 {
    debug_assert!(len >= 2);
