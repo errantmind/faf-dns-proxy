@@ -118,7 +118,7 @@ pub fn get_query_unique_id<'a>(dns_buf_start: *const u8, len: usize) -> &'a [u8]
 }
 
 #[inline]
-pub fn get_question_as_string_and_lowest_ttl(dns_buf_start: *const u8, len: usize) -> (String, u64) {
+pub fn get_question_as_string_and_lowest_ttl(dns_buf_start: *const u8, len: usize) -> (String, &'static str, &'static str, u64) {
    let mut question_str = String::new();
    let mut ttl: u32 = u32::MAX;
    unsafe {
@@ -146,27 +146,18 @@ pub fn get_question_as_string_and_lowest_ttl(dns_buf_start: *const u8, len: usiz
       //// Skip Question section's QNAME TERMINATOR + QTYPE + QCLASS
       //dns_qname_qtype_qclass_walker = dns_qname_qtype_qclass_walker.add(5);
 
-      {
-         // Include the entire query (.. + QTYPE + QCLASS)
+      // Include the entire query (.. + QTYPE + QCLASS)
 
-         // Skip QNAME TERMINATOR
-         dns_qname_qtype_qclass_walker = dns_qname_qtype_qclass_walker.add(1);
+      // Skip QNAME TERMINATOR
+      dns_qname_qtype_qclass_walker = dns_qname_qtype_qclass_walker.add(1);
 
-         // Add separator between QNAME and QTYPE
-         question_str.push_str(" : ");
+      // Add QTYPE
+      let qtype = u16::swap_bytes(*(dns_qname_qtype_qclass_walker as *const _ as *const u16));
+      dns_qname_qtype_qclass_walker = dns_qname_qtype_qclass_walker.add(2);
 
-         // Add QTYPE
-         let qtype = u16::swap_bytes(*(dns_qname_qtype_qclass_walker as *const _ as *const u16));
-         question_str.push_str(map_qtype_to_str(qtype));
-         dns_qname_qtype_qclass_walker = dns_qname_qtype_qclass_walker.add(2);
-
-         // Add separator between QTYPE and QCLASS
-         question_str.push_str(" : ");
-
-         let qclass = u16::swap_bytes(*(dns_qname_qtype_qclass_walker as *const _ as *const u16));
-         question_str.push_str(map_qclass_to_str(qclass));
-         dns_qname_qtype_qclass_walker = dns_qname_qtype_qclass_walker.add(2);
-      }
+      // Add QCLASS
+      let qclass = u16::swap_bytes(*(dns_qname_qtype_qclass_walker as *const _ as *const u16));
+      dns_qname_qtype_qclass_walker = dns_qname_qtype_qclass_walker.add(2);
 
       // Parse TTL from answers.
       // This is where it gets tricky due to the compression scheme used. It can use pointers (offsets) but doesn't have to.
@@ -199,7 +190,7 @@ pub fn get_question_as_string_and_lowest_ttl(dns_buf_start: *const u8, len: usiz
                question_str, 500
             );
 
-            return (question_str, 500);
+            return (question_str, map_qtype_to_str(qtype), map_qclass_to_str(qclass), 500);
          }
 
          let size_be = *(dns_qname_qtype_qclass_walker as *const _ as *const u32);
@@ -208,7 +199,7 @@ pub fn get_question_as_string_and_lowest_ttl(dns_buf_start: *const u8, len: usiz
             ttl = latest_ttl;
          }
       }
-   }
 
-   (question_str, ttl as u64)
+      return (question_str, map_qtype_to_str(qtype), map_qclass_to_str(qclass), ttl as u64);
+   }
 }
