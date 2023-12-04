@@ -18,6 +18,8 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 // DNS packet structure reference: https://mislove.org/teaching/cs4700/spring11/handouts/project1-primer.pdf
 
+use crate::dns;
+
 #[inline]
 pub fn get_id_network_byte_order(dns_buf_start: *const u8, len: usize) -> u16 {
    debug_assert!(len >= 2);
@@ -35,6 +37,52 @@ pub fn get_tcp_dns_size_prefix_le(input: &[u8]) -> usize {
    debug_assert!(input.len() >= 2);
    let size_network_byte_order = unsafe { *(input as *const _ as *const u16) };
    u16::swap_bytes(size_network_byte_order) as usize
+}
+
+#[inline]
+pub fn map_qtype_to_str(qtype: u16) -> &'static str {
+   match qtype {
+      1 => "A",
+      2 => "NS",
+      5 => "CNAME",
+      6 => "SOA",
+      12 => "PTR",
+      15 => "MX",
+      16 => "TXT",
+      28 => "AAAA",
+      33 => "SRV",
+      41 => "OPT",
+      43 => "DS",
+      46 => "RRSIG",
+      47 => "NSEC",
+      48 => "DNSKEY",
+      50 => "NSEC3",
+      51 => "NSEC3PARAM",
+      52 => "TLSA",
+      59 => "CAA",
+      99 => "SPF",
+      250 => "TSIG",
+      251 => "IXFR",
+      252 => "AXFR",
+      255 => "ANY",
+      256 => "URI",
+      257 => "CAA",
+      32768 => "TA",
+      32769 => "DLV",
+      _ => "UNKNOWN",
+   }
+}
+
+#[inline]
+pub fn map_qclass_to_str(qclass: u16) -> &'static str {
+   match qclass {
+      1 => "IN",
+      2 => "CS",
+      3 => "CH",
+      4 => "HS",
+      255 => "ANY",
+      _ => "UNKNOWN",
+   }
 }
 
 /// Walks one question in the query (QNAME, QTYPE, QCLASS) and returns these bytes a slice of the buffer
@@ -97,8 +145,30 @@ pub fn get_question_as_string_and_lowest_ttl(dns_buf_start: *const u8, len: usiz
          dns_qname_qtype_qclass_walker = dns_qname_qtype_qclass_walker.add(1 + segment_len);
       }
 
-      // Skip Question section's QNAME TERMINATOR + QTYPE + QCLASS
-      dns_qname_qtype_qclass_walker = dns_qname_qtype_qclass_walker.add(5);
+      //// Skip Question section's QNAME TERMINATOR + QTYPE + QCLASS
+      //dns_qname_qtype_qclass_walker = dns_qname_qtype_qclass_walker.add(5);
+
+      {
+         // Include the entire query (.. + QTYPE + QCLASS)
+
+         // Skip QNAME TERMINATOR
+         dns_qname_qtype_qclass_walker = dns_qname_qtype_qclass_walker.add(1);
+
+         // Add space between QNAME and QTYPE
+         question_str.push(' ');
+
+         // Add QTYPE
+         let qtype = u16::swap_bytes(*(dns_qname_qtype_qclass_walker as *const _ as *const u16));
+         question_str.push_str(map_qtype_to_str(qtype));
+         dns_qname_qtype_qclass_walker = dns_qname_qtype_qclass_walker.add(2);
+
+         // Add space between QTYPE and QCLASS
+         question_str.push(' ');
+
+         let qclass = u16::swap_bytes(*(dns_qname_qtype_qclass_walker as *const _ as *const u16));
+         question_str.push_str(map_qclass_to_str(qclass));
+         dns_qname_qtype_qclass_walker = dns_qname_qtype_qclass_walker.add(2);
+      }
 
       // Parse TTL from answers.
       // This is where it gets tricky due to the compression scheme used. It can use pointers (offsets) but doesn't have to.
@@ -139,26 +209,6 @@ pub fn get_question_as_string_and_lowest_ttl(dns_buf_start: *const u8, len: usiz
          if latest_ttl < ttl {
             ttl = latest_ttl;
          }
-      }
-
-      {
-         // Include the entire query (.. + QTYPE + QCLASS)
-
-         // let mut buf: [u8; 3] = core::mem::zeroed();
-         // let qtype_first_byte_len = crate::u64toa::u8toa(buf.as_mut_ptr(), *dns_qname_qtype_qclass_walker);
-         // question_str.push_str(std::str::from_utf8(core::slice::from_raw_parts(buf.as_mut_ptr(), qtype_first_byte_len)).unwrap());
-         // dns_qname_qtype_qclass_walker = dns_qname_qtype_qclass_walker.add(1);
-
-         // let qtype_second_byte_len = crate::u64toa::u8toa(buf.as_mut_ptr(), *dns_qname_qtype_qclass_walker);
-         // question_str.push_str(std::str::from_utf8(core::slice::from_raw_parts(buf.as_mut_ptr(), qtype_second_byte_len)).unwrap());
-         // dns_qname_qtype_qclass_walker = dns_qname_qtype_qclass_walker.add(1);
-
-         // let qclass_first_byte_len = crate::u64toa::u8toa(buf.as_mut_ptr(), *dns_qname_qtype_qclass_walker);
-         // question_str.push_str(std::str::from_utf8(core::slice::from_raw_parts(buf.as_mut_ptr(), qclass_first_byte_len)).unwrap());
-         // dns_qname_qtype_qclass_walker = dns_qname_qtype_qclass_walker.add(1);
-
-         // let qclass_second_byte_len = crate::u64toa::u8toa(buf.as_mut_ptr(), *dns_qname_qtype_qclass_walker);
-         // question_str.push_str(std::str::from_utf8(core::slice::from_raw_parts(buf.as_mut_ptr(), qclass_second_byte_len)).unwrap());
       }
    }
 
