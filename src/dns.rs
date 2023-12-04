@@ -153,7 +153,7 @@ pub fn get_question_as_string_and_lowest_ttl(dns_buf_start: *const u8, len: usiz
          dns_qname_qtype_qclass_walker = dns_qname_qtype_qclass_walker.add(1);
 
          // Add separator between QNAME and QTYPE
-         question_str.push(':');
+         question_str.push_str(" : ");
 
          // Add QTYPE
          let qtype = u16::swap_bytes(*(dns_qname_qtype_qclass_walker as *const _ as *const u16));
@@ -161,7 +161,7 @@ pub fn get_question_as_string_and_lowest_ttl(dns_buf_start: *const u8, len: usiz
          dns_qname_qtype_qclass_walker = dns_qname_qtype_qclass_walker.add(2);
 
          // Add separator between QTYPE and QCLASS
-         question_str.push(':');
+         question_str.push_str(" : ");
 
          let qclass = u16::swap_bytes(*(dns_qname_qtype_qclass_walker as *const _ as *const u16));
          question_str.push_str(map_qclass_to_str(qclass));

@@ -173,7 +173,7 @@ checksum = "acbf1af155f9b9ef647e42cdc158db4b64a1b61f743629225fde6f3e0be2a7c7"
 
 [[package]]
 name = "faf-dns-proxy"
-version = "0.5.6"
+version = "0.5.7"
 dependencies = [
  "clap",
  "hashbrown",
