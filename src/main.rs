@@ -24,6 +24,7 @@ mod stats;
 mod tls;
 mod util;
 
+#[cfg(target_os = "linux")]
 #[global_allocator]
 static GLOBAL: tcmalloc::TCMalloc = tcmalloc::TCMalloc;
 
