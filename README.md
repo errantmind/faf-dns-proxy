@@ -19,13 +19,14 @@ An example of the default (non-daemon) output, which gives some immediate insigh
 
 ## Features
 
-- Full-duplex async design
-- Minimal parsing of DNS records to lower overhead
+- Full-duplex async design.
+- Minimal parsing of DNS records to lower overhead.
 - 'Shotgun' DNS queries to multiple upstream resolvers by default. The first reply wins.
 - Caching of DNS answers (using the TTL on the answer), with optional minimum TTL override.
 - TLS Session Caching (to avoid a full handshake when (re)connecting to upstream resolvers).
 - Connection re-use.
 - Automatic reconnections to DNS servers when connections are closed to ensure resolution doesn't wait on first establishing a connection.
+- SNI disabled by default.
 
 ## How Does This Work?
 

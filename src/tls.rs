@@ -32,6 +32,9 @@ pub fn get_tls_client_config() -> tokio_rustls::rustls::ClientConfig {
       .with_root_certificates(root_cert_store.clone())
       .with_no_client_auth();
 
+   config.resumption = tokio_rustls::rustls::client::Resumption::default();
+   config.enable_sni = false;
+
    config.enable_early_data = true;
 
    config

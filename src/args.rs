@@ -22,7 +22,11 @@ use clap::Parser;
 #[derive(Parser, Debug, Default)]
 #[clap(author, version, about, long_about = None)]
 pub struct Args {
-   /// [optional] daemon mode, no logging output
+   /// [optional] daemon mode, no logging output. 
    #[clap(short, long)]
    pub daemon: bool,
+
+   /// [optional] enable SNI (Server Name Indication) for TLS connections to upstream DNS servers.
+   #[clap(short, long)]
+   pub enable_sni: bool,
 }

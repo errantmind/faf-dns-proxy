@@ -25,7 +25,7 @@ mod tls;
 mod util;
 
 #[global_allocator]
-static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+static GLOBAL: tcmalloc::TCMalloc = tcmalloc::TCMalloc;
 
 pub fn main() {
    if !statics::ARGS.daemon {

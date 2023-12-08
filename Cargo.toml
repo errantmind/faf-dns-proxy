@@ -1,6 +1,6 @@
 [package]
 name = "faf-dns-proxy"
-version = "0.5.7"
+version = "0.6.0"
 authors = ["James Bates <errantmind@protonmail.com>"]
 edition = "2021"
 
@@ -32,8 +32,7 @@ strip = 'symbols'
 default = []
 
 [dependencies]
-# FFI bindings to better allocator designed by Microsoft
-mimalloc = { version = "~0.1.39", default-features = false }
+tcmalloc = { version = "~0.3.0", default-features = false, features = ["bundled"] }
 
 clap = { version = "^4.4.10", default-features = true, features = ["derive"] }
 lazy_static = "^1.4.0"
