@@ -200,6 +200,6 @@ pub fn get_question_as_string_and_lowest_ttl(dns_buf_start: *const u8, len: usiz
          }
       }
 
-      return (question_str, map_qtype_to_str(qtype), map_qclass_to_str(qclass), ttl as u64);
+      (question_str, map_qtype_to_str(qtype), map_qclass_to_str(qclass), ttl as u64)
    }
 }
