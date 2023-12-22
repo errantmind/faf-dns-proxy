@@ -45,8 +45,8 @@ lazy_static::lazy_static! {
 // timing collisions but they should be very rare. There is a 1 / 2^16 chance of a collision, but even then
 // only if the requests arrive around the exact same time with the same id. Note, cached responses are not
 // affected by this, which makes the odds even lower.
-static mut BUF_ID_ROUTER: [std::net::SocketAddr; u16::MAX as usize] =
-   [std::net::SocketAddr::V4(std::net::SocketAddrV4::new(std::net::Ipv4Addr::UNSPECIFIED, 0)); u16::MAX as usize];
+static mut BUF_ID_ROUTER: [std::net::SocketAddr; u16::MAX as usize + 1] =
+   [std::net::SocketAddr::V4(std::net::SocketAddrV4::new(std::net::Ipv4Addr::UNSPECIFIED, 0)); u16::MAX as usize + 1];
 
 pub async fn go(port: u16) {
    tokio::task::spawn(async move {
@@ -379,7 +379,7 @@ async fn connect(
       let _ = tcp_stream.set_nodelay(true);
 
       let tls_stream = match tls_connector
-         .connect(tokio_rustls::rustls::ServerName::try_from(upstream_dns.server_name).unwrap(), tcp_stream)
+         .connect(tokio_rustls::rustls::pki_types::ServerName::try_from(upstream_dns.server_name).unwrap(), tcp_stream)
          .await
       {
          Ok(stream) => stream,

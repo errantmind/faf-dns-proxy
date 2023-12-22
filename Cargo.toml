@@ -1,6 +1,6 @@
 [package]
 name = "faf-dns-proxy"
-version = "0.6.0"
+version = "0.6.1"
 authors = ["James Bates <errantmind@protonmail.com>"]
 edition = "2021"
 
@@ -40,13 +40,11 @@ once_cell = "^1.18"
 webpki-roots = "~0.26.0"
 hashbrown = { version = "~0.14.3", default-features = true, features = ["inline-more", "ahash"] }
 
-# faster hasher for keys that are particular primitives
-nohash-hasher = "~0.2.0"
-
 # faster channel
 kanal = "0.1.0-pre8"
 
 # async runtime/executor
 tokio = { version = "^1.34.0", features = ["rt-multi-thread", "net", "io-util", "time", "macros", "sync"] }
-tokio-rustls = { version = "~0.24.1", features = ["default", "early-data"] }
+tokio-rustls = { version = "~0.25.0", features = ["default", "early-data"] }
+
 
