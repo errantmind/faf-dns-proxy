@@ -17,6 +17,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
 use hashbrown::HashMap;
+use tokio::io::AsyncWriteExt;
 
 static mut STATS: once_cell::sync::Lazy<[crate::stats::Stats; crate::statics::DNS_SERVERS.len()]> =
    once_cell::sync::Lazy::new(crate::stats::init_stats);
@@ -142,7 +143,7 @@ pub async fn go(port: u16) {
 }
 
 pub async fn upstream_tls_handler(
-   msg_rx: kanal::AsyncReceiver<Vec<u8>>,
+   client_msg_rx: kanal::AsyncReceiver<Vec<u8>>,
    upstream_dns_index: usize,
    listener_addr: std::sync::Arc<tokio::net::UdpSocket>,
 ) {
@@ -154,37 +155,39 @@ pub async fn upstream_tls_handler(
    let (mut shutdown_writer_tx, mut shutdown_writer_rx) = tokio::sync::oneshot::channel();
    let (mut shutdown_reader_tx, mut shutdown_reader_rx) = tokio::sync::oneshot::channel();
    let mut tls_stream = connect(&tls_connector, &upstream_dns).await;
-   let mut tls_stream_split = tokio::io::split(tls_stream);
-   let mut write_handle = tokio::task::spawn(handle_writes(tls_stream_split.1, msg_rx, None, shutdown_writer_rx));
-   let mut read_handle =
-      tokio::task::spawn(handle_reads(tls_stream_split.0, upstream_dns_index, listener_addr.clone(), shutdown_reader_rx));
+   let (mut read_half, mut write_half) = tokio::io::split(tls_stream);
+   let mut write_handle = tokio::task::spawn(handle_writes(write_half, client_msg_rx, None, shutdown_writer_rx));
+   let mut read_handle = tokio::task::spawn(handle_reads(read_half, upstream_dns_index, listener_addr.clone(), shutdown_reader_rx));
 
    loop {
-      let (msg_rx, unsent_query) = tokio::select! {
+      let (client_msg_rx, unsent_query) = tokio::select! {
             write_result = &mut write_handle => {
-            if !read_handle.is_finished() {
-               shutdown_reader_tx.send(true).unwrap();
-               let _ = read_handle.await;
-            }
+               // If our write handle has returned, we need to ensure the read handle is finished before we re-establish the connection
+               if !read_handle.is_finished() {
+                  shutdown_reader_tx.send(true).unwrap();
+                  let _ = read_handle.await;
+               }
 
-            write_result.unwrap()
+               write_result.unwrap()
             },
 
             _ = &mut read_handle => {
-            if !write_handle.is_finished() {
-               shutdown_writer_tx.send(true).unwrap();
-            }
+               // If our read handle has returned, we need to ensure the write handle is finished before we re-establish the connection
+               if !write_handle.is_finished() {
+                  shutdown_writer_tx.send(true).unwrap();
+               }
 
-            write_handle.await.unwrap()
+               write_handle.await.unwrap()
          }
       };
 
       (shutdown_writer_tx, shutdown_writer_rx) = tokio::sync::oneshot::channel();
       (shutdown_reader_tx, shutdown_reader_rx) = tokio::sync::oneshot::channel();
       tls_stream = connect(&tls_connector, &upstream_dns).await;
-      tls_stream_split = tokio::io::split(tls_stream);
-      write_handle = tokio::task::spawn(handle_writes(tls_stream_split.1, msg_rx, unsent_query, shutdown_writer_rx));
-      read_handle = tokio::task::spawn(handle_reads(tls_stream_split.0, upstream_dns_index, listener_addr.clone(), shutdown_reader_rx));
+
+      (read_half, write_half) = tokio::io::split(tls_stream);
+      write_handle = tokio::task::spawn(handle_writes(write_half, client_msg_rx, unsent_query, shutdown_writer_rx));
+      read_handle = tokio::task::spawn(handle_reads(read_half, upstream_dns_index, listener_addr.clone(), shutdown_reader_rx));
    }
 }
 
@@ -232,17 +235,14 @@ async fn handle_writes(
 }
 
 async fn write(
-   mut write_half: &mut tokio::io::WriteHalf<tokio_rustls::client::TlsStream<tokio::net::TcpStream>>,
+   write_half: &mut tokio::io::WriteHalf<tokio_rustls::client::TlsStream<tokio::net::TcpStream>>,
    query_buf: Vec<u8>,
 ) -> Option<Vec<u8>> {
-   match tokio::io::AsyncWriteExt::write(&mut write_half, &query_buf).await {
-      Ok(_bytes_written_to_socket) => {
-         if tokio::io::AsyncWriteExt::flush(&mut write_half).await.is_err() {
-            Some(query_buf)
-         } else {
-            None
-         }
-      }
+   match write_half.write_all(&query_buf).await {
+      Ok(_) => match write_half.flush().await {
+         Ok(_) => None,
+         Err(_) => Some(query_buf),
+      },
       Err(_) => Some(query_buf),
    }
 }
@@ -256,100 +256,104 @@ async fn handle_reads(
    let mut response_buf = vec![0; 2 << 15];
 
    loop {
-      {
-         let tls_bytes_read;
+      let tls_bytes_read;
 
-         tokio::select! {
-            shutdown_msg = &mut shutdown_reader_rx => {
-               match shutdown_msg {
-                  Ok(_) => return,
-                  Err(_) => panic!("Shutdown Channel has been closed prematurely")
-               };
-            },
-            read_result = tokio::io::AsyncReadExt::read(&mut read_half, &mut response_buf) => {
-               match read_result {
-                  Ok(0) => return,
-                  Ok(n) => tls_bytes_read = n,
-                  Err(_) => return,
+      tokio::select! {
+         shutdown_msg = &mut shutdown_reader_rx => {
+            match shutdown_msg {
+               Ok(_) => return,
+               Err(_) => panic!("Shutdown Channel has been closed prematurely")
+            };
+         },
+         read_result = tokio::io::AsyncReadExt::read(&mut read_half, &mut response_buf) => {
+            match read_result {
+               Ok(0) => {
+                  // The upstream closed the connection.
+                  // Many DNS servers, including Cloudflare, will close the connection after a short period of inactivity.
+                  return;
+               },
+               Ok(n) => tls_bytes_read = n,
+               Err(_) => {
+                  // Google DNS will occasionally close the connection without sending TLS close_notify.
+                  // This is against the RFC but we handle it anyway, along with any other errors.
+                  return;
                }
             }
          }
+      }
 
-         let mut offset = 0;
-         loop {
-            let udp_segment_len = crate::dns::get_tcp_dns_size_prefix_le(&response_buf[offset..]);
-            if !udp_segment_len > 0 && !udp_segment_len <= 512 {
-               panic!("Tcp reported len is invalid ({udp_segment_len})");
-            };
-            assert!(
-               udp_segment_len <= (tls_bytes_read - 2),
-               "Udp segment length cannot be larger than the TCP wrapper ({udp_segment_len}/{tls_bytes_read})"
-            );
+      let mut offset = 0;
+      loop {
+         let udp_segment_len = crate::dns::get_tcp_dns_size_prefix_le(&response_buf[offset..]);
+         if !udp_segment_len > 0 && !udp_segment_len <= 512 {
+            panic!("Tcp reported len is invalid ({udp_segment_len})");
+         };
+         assert!(
+            udp_segment_len <= (tls_bytes_read - 2),
+            "Udp segment length cannot be larger than the TCP wrapper ({udp_segment_len}/{tls_bytes_read})"
+         );
 
-            let udp_segment_no_tcp_prefix = &response_buf[offset + 2..offset + udp_segment_len + 2];
+         let udp_segment_no_tcp_prefix = &response_buf[offset + 2..offset + udp_segment_len + 2];
 
-            // Scope for guards
+         // Scope for guards
+         {
             {
-               {
-                  let id = crate::dns::get_id_network_byte_order(udp_segment_no_tcp_prefix.as_ptr(), udp_segment_no_tcp_prefix.len());
-                  let cache_key = crate::dns::get_query_unique_id(udp_segment_no_tcp_prefix.as_ptr(), udp_segment_no_tcp_prefix.len());
-                  let mut cache_guard = DNS_ANSWER_CACHE.lock().await;
-                  if !cache_guard.contains_key(cache_key) {
-                     {
-                        // Scope for id_router_guard
+               let id = crate::dns::get_id_network_byte_order(udp_segment_no_tcp_prefix.as_ptr(), udp_segment_no_tcp_prefix.len());
+               let cache_key = crate::dns::get_query_unique_id(udp_segment_no_tcp_prefix.as_ptr(), udp_segment_no_tcp_prefix.len());
+               let mut cache_guard = DNS_ANSWER_CACHE.lock().await;
+               if !cache_guard.contains_key(cache_key) {
+                  {
+                     // Scope for id_router_guard
 
-                        let saved_addr = unsafe { BUF_ID_ROUTER[id as usize] };
+                     let saved_addr = unsafe { BUF_ID_ROUTER[id as usize] };
 
-                        let wrote = listener_addr.send_to(udp_segment_no_tcp_prefix, &saved_addr).await.unwrap();
+                     let wrote = listener_addr.send_to(udp_segment_no_tcp_prefix, &saved_addr).await.unwrap();
 
-                        if wrote == 0 {
-                           panic!("Wrote nothing to client after receiving data from upstream")
-                        }
+                     if wrote == 0 {
+                        panic!("Wrote nothing to client after receiving data from upstream")
                      }
+                  }
 
-                     let elapsed_ms = crate::util::get_unix_ts_millis() - DNS_TIMING_CACHE.lock().await.get(cache_key).unwrap().asked_at;
+                  let elapsed_ms = crate::util::get_unix_ts_millis() - DNS_TIMING_CACHE.lock().await.get(cache_key).unwrap().asked_at;
 
-                     let (site_name, qtype_str, qclass_str, mut ttl) = crate::dns::get_question_as_string_and_lowest_ttl(
-                        udp_segment_no_tcp_prefix.as_ptr(),
-                        udp_segment_no_tcp_prefix.len(),
-                     );
+                  let (site_name, qtype_str, qclass_str, mut ttl) =
+                     crate::dns::get_question_as_string_and_lowest_ttl(udp_segment_no_tcp_prefix.as_ptr(), udp_segment_no_tcp_prefix.len());
 
-                     if ttl < crate::statics::MINIMUM_TTL_OVERRIDE {
-                        ttl = crate::statics::MINIMUM_TTL_OVERRIDE;
-                     }
+                  if ttl < crate::statics::MINIMUM_TTL_OVERRIDE {
+                     ttl = crate::statics::MINIMUM_TTL_OVERRIDE;
+                  }
 
-                     cache_guard.insert(
-                        cache_key.to_vec(),
-                        AnswerCacheEntry {
-                           answer: udp_segment_no_tcp_prefix.to_vec(),
+                  cache_guard.insert(
+                     cache_key.to_vec(),
+                     AnswerCacheEntry {
+                        answer: udp_segment_no_tcp_prefix.to_vec(),
+                        elapsed_ms,
+                        expires_at: crate::util::get_unix_ts_secs() + ttl,
+                     },
+                  );
+
+                  unsafe {
+                     if !crate::statics::ARGS.daemon {
+                        let fastest_count = crate::stats::Stats::array_increment_fastest(STATS.as_mut(), upstream_dns_index);
+                        println!(
+                           "{:>4}ms -> {:<46} {:>7} {:>3} ({} [{}])",
                            elapsed_ms,
-                           expires_at: crate::util::get_unix_ts_secs() + ttl,
-                        },
-                     );
-
-                     unsafe {
-                        if !crate::statics::ARGS.daemon {
-                           let fastest_count = crate::stats::Stats::array_increment_fastest(STATS.as_mut(), upstream_dns_index);
-                           println!(
-                              "{:>4}ms -> {:<46} {:>7} {:>3} ({} [{}])",
-                              elapsed_ms,
-                              site_name,
-                              qtype_str,
-                              qclass_str,
-                              format!("{}", crate::statics::DNS_SERVERS[upstream_dns_index].socket_addr.ip()).as_str(),
-                              fastest_count
-                           );
-                        }
+                           site_name,
+                           qtype_str,
+                           qclass_str,
+                           format!("{}", crate::statics::DNS_SERVERS[upstream_dns_index].socket_addr.ip()).as_str(),
+                           fastest_count
+                        );
                      }
                   }
                }
             }
+         }
 
-            offset += udp_segment_len + 2;
+         offset += udp_segment_len + 2;
 
-            if offset == tls_bytes_read {
-               break;
-            }
+         if offset == tls_bytes_read {
+            break;
          }
       }
    }

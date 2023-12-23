@@ -18,18 +18,13 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 #[inline]
 pub fn get_tls_client_config() -> tokio_rustls::rustls::ClientConfig {
-   let mut root_store =  tokio_rustls::rustls::RootCertStore::empty();
+   let mut root_store = tokio_rustls::rustls::RootCertStore::empty();
    root_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
 
-
-
-   let mut config = tokio_rustls::rustls::ClientConfig::builder()      
-      .with_root_certificates(root_store)
-      .with_no_client_auth();
+   let mut config = tokio_rustls::rustls::ClientConfig::builder().with_root_certificates(root_store).with_no_client_auth();
 
    config.resumption = tokio_rustls::rustls::client::Resumption::default();
    config.enable_sni = crate::statics::ARGS.enable_sni;
-
    config.enable_early_data = true;
 
    config
