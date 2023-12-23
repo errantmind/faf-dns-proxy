@@ -49,6 +49,7 @@ pub const DNS_SERVERS: [UpstreamDnsServer; 6] = [
 
 /// Blocklists to use for DNS filtering. The fiiles are downloaded and parsed at startup (if they have been updated upstream),
 /// then cached in memory. They must be a list of domains, one per line. Comments (lines starting with #) are automatically removed.
+/// A good place to start: https://v.firebog.net/hosts/
 pub const BLOCKLISTS: [&str; 3] = [
    "https://v.firebog.net/hosts/AdguardDNS.txt",
    "https://v.firebog.net/hosts/Easylist.txt",

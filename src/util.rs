@@ -18,6 +18,12 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 /// Gets duration since UNIX_EPOCH in milliseconds
 #[inline]
+pub fn get_unix_ts_nanos() -> u128 {
+   std::time::SystemTime::now().duration_since(std::time::SystemTime::UNIX_EPOCH).unwrap().as_nanos()
+}
+
+/// Gets duration since UNIX_EPOCH in milliseconds
+#[inline]
 pub fn get_unix_ts_millis() -> u128 {
    std::time::SystemTime::now().duration_since(std::time::SystemTime::UNIX_EPOCH).unwrap().as_millis()
 }
