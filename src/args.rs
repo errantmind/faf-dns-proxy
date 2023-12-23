@@ -22,11 +22,19 @@ use clap::Parser;
 #[derive(Parser, Debug, Default)]
 #[clap(author, version, about, long_about = None)]
 pub struct Args {
-   /// [optional] daemon mode, no logging output. 
+   /// [optional] daemon mode, no logging output.
    #[clap(short, long)]
    pub daemon: bool,
 
    /// [optional] enable SNI (Server Name Indication) for TLS connections to upstream DNS servers.
-   #[clap(short, long)]
+   #[clap(long)]
    pub enable_sni: bool,
+
+   /// [optional] enable domain blocklists.
+   #[clap(long)]
+   pub enable_blocklists: bool,
+
+   /// [optional] data directory to store blocklists. Defaults to the current working directory.
+   #[clap(long)]
+   pub data_directory: Option<std::path::PathBuf>,
 }

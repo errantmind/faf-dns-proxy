@@ -40,6 +40,8 @@ lazy_static::lazy_static! {
 
    static ref DNS_ANSWER_CACHE: tokio::sync::Mutex<HashMap<Vec<u8>, AnswerCacheEntry>> =
    tokio::sync::Mutex::new(HashMap::with_capacity(4096));
+
+   static ref BLOCKLISTS: tokio::sync::Mutex<Vec<crate::blocklist::BlocklistFile>> = tokio::sync::Mutex::new(Vec::new());
 }
 
 // We route DNS responses by the id they provided in the initial request. This may occasionally cause
@@ -50,7 +52,7 @@ static mut BUF_ID_ROUTER: [std::net::SocketAddr; u16::MAX as usize + 1] =
    [std::net::SocketAddr::V4(std::net::SocketAddrV4::new(std::net::Ipv4Addr::UNSPECIFIED, 0)); u16::MAX as usize + 1];
 
 pub async fn go(port: u16) {
-   tokio::task::spawn(async move {
+   let proxy = tokio::task::spawn(async move {
       let listener_addr = std::net::SocketAddrV4::new(std::net::Ipv4Addr::UNSPECIFIED, port);
       let listener_socket = std::sync::Arc::new(tokio::net::UdpSocket::bind(listener_addr).await.unwrap());
 
@@ -78,7 +80,34 @@ pub async fn go(port: u16) {
             }
          };
          assert!(read_bytes <= 512, "Received a datagram with > 512 bytes on the UDP socket");
-         let udp_segment = &query_buf[2..read_bytes + 2];
+         let udp_segment = &mut query_buf[2..read_bytes + 2];
+
+         if crate::statics::ARGS.enable_blocklists {
+            let question = crate::dns::get_question_as_string(udp_segment.as_ptr(), udp_segment.len());
+            let mut primary_domain = String::new();
+
+            let parts: Vec<&str> = question.rsplitn(3, '.').collect();
+            if parts.len() > 2 {
+               primary_domain = format!("{}.{}", parts[1], parts[0]);
+            }
+
+            let mut domain_is_blocked = false;
+            for blocklist_file in BLOCKLISTS.lock().await.iter() {
+               if blocklist_file.blocked_domains.contains(&question)
+                  || (!primary_domain.is_empty() && blocklist_file.blocked_domains.contains(&primary_domain))
+               {
+                  crate::dns::mutate_question_into_bogus_response(udp_segment);
+                  let wrote = listener_socket.send_to(udp_segment, &client_addr).await.unwrap();
+                  assert!(wrote != 0, "Response is blocked but we wrote nothing to client");
+                  domain_is_blocked = true;
+                  break;
+               }
+            }
+
+            if domain_is_blocked {
+               continue;
+            }
+         }
 
          let id = crate::dns::get_id_network_byte_order(udp_segment.as_ptr(), udp_segment.len());
          let cache_key = crate::dns::get_query_unique_id(udp_segment.as_ptr(), udp_segment.len());
@@ -137,9 +166,14 @@ pub async fn go(port: u16) {
             };
          }
       }
-   })
-   .await
-   .unwrap();
+   });
+
+   if crate::statics::ARGS.enable_blocklists {
+      let blocklist = crate::blocklist::get_blocklists().await;
+      *BLOCKLISTS.lock().await = blocklist;
+   }
+
+   proxy.await.unwrap();
 }
 
 pub async fn upstream_tls_handler(

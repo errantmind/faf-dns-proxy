@@ -47,6 +47,14 @@ pub const DNS_SERVERS: [UpstreamDnsServer; 6] = [
    // },
 ];
 
+/// Blocklists to use for DNS filtering. The fiiles are downloaded and parsed at startup (if they have been updated upstream),
+/// then cached in memory. They must be a list of domains, one per line. Comments (lines starting with #) are automatically removed.
+pub const BLOCKLISTS: [&str; 3] = [
+   "https://v.firebog.net/hosts/AdguardDNS.txt",
+   "https://v.firebog.net/hosts/Easylist.txt",
+   "https://v.firebog.net/hosts/Easyprivacy.txt",
+];
+
 /// Overrides TTL on DNS records to the value specified, if DNS record has a value lower than the value specified.
 /// To disable, set the value below to 0.
 pub const MINIMUM_TTL_OVERRIDE: u64 = 300;

@@ -17,6 +17,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
 mod args;
+mod blocklist;
 mod dns;
 mod proxy;
 mod statics;
@@ -33,6 +34,7 @@ pub fn main() {
       print_banner();
       print_version();
    }
+   
 
    tokio::runtime::Runtime::new().unwrap().block_on(proxy::go(53));
 }

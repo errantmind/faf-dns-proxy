@@ -118,6 +118,30 @@ pub fn get_query_unique_id<'a>(dns_buf_start: *const u8, len: usize) -> &'a [u8]
 }
 
 #[inline]
+pub fn get_question_as_string(dns_buf_start: *const u8, len: usize) -> String {
+   let mut question_str = String::new();
+   unsafe {
+      const QNAME_TERMINATOR: u8 = 0;
+      let dns_buf_end = dns_buf_start.add(len);
+
+      // Skip the header
+      let mut dns_qname_qtype_qclass_walker = dns_buf_start.add(12);
+
+      while *dns_qname_qtype_qclass_walker != QNAME_TERMINATOR && dns_qname_qtype_qclass_walker != dns_buf_end {
+         let segment_len = *dns_qname_qtype_qclass_walker as usize;
+         if !question_str.is_empty() {
+            question_str.push('.');
+         }
+         question_str
+            .push_str(std::str::from_utf8(core::slice::from_raw_parts(dns_qname_qtype_qclass_walker.add(1), segment_len)).unwrap());
+         dns_qname_qtype_qclass_walker = dns_qname_qtype_qclass_walker.add(1 + segment_len);
+      }
+
+      question_str
+   }
+}
+
+#[inline]
 pub fn get_question_as_string_and_lowest_ttl(dns_buf_start: *const u8, len: usize) -> (String, &'static str, &'static str, u64) {
    let mut question_str = String::new();
    let mut ttl: u32 = u32::MAX;
@@ -202,4 +226,16 @@ pub fn get_question_as_string_and_lowest_ttl(dns_buf_start: *const u8, len: usiz
 
       (question_str, map_qtype_to_str(qtype), map_qclass_to_str(qclass), ttl as u64)
    }
+}
+
+#[inline]
+pub fn mutate_question_into_bogus_response(dns_buf: &mut [u8]) {
+   // Set the QR bit to 1 (response)
+   dns_buf[2] |= 0b1000_0000;
+
+   // Set the RA bit to 1 (recursion available)
+   dns_buf[3] |= 0b1000_0000;
+
+   // Set the RCODE to 3 (NXDOMAIN)
+   dns_buf[3] |= 0b0000_0011;
 }
