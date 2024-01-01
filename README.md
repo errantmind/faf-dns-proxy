@@ -6,9 +6,9 @@ FaF has been tested on Linux, Mac (M1), and Windows, and may work on other platf
 
 ![](diagram.png)
 
-An example of the default (non-daemon) output, which gives some immediate insights into timings and upstream DNS resolver performance. This also demonstrates the experimental 'client identification' feature which is optional as it adds about 10ms of latency:
+An example of the default (non-daemon) output, which gives some immediate insights into timings and upstream DNS resolver performance. This also demonstrates the 'client identification' feature which is optional as it adds about 10ms of latency:
 
-![Non-Daemon Output Example with experimental 'client identification'](output2.png)
+![Non-Daemon Output Example with 'client identification'](output2.png)
 
 ## Why Use This?
 
@@ -19,8 +19,8 @@ An example of the default (non-daemon) output, which gives some immediate insigh
 
 ## Features
 
-- DNS filtering (e.g. adblock - experimental, disabled by default)
-- Client identification - Identify which process are issuing what queries on your computer (linux only, experimental, disabled by default)
+- DNS filtering (e.g. adblock - disabled by default)
+- Client identification - Identify which process are issuing what queries on your computer (linux only, disabled by default)
 - Full-duplex async design.
 - Minimal parsing of DNS records to lower overhead.
 - 'Shotgun' DNS queries to multiple upstream resolvers by default. The first reply wins.
