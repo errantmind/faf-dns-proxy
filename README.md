@@ -6,7 +6,7 @@ FaF has been tested on Linux, Mac (M1), and Windows, and may work on other platf
 
 ![](diagram.png)
 
-An example of the default (non-daemon) output, which gives some immediate insights into timings and upstream DNS resolver performance:
+An example of the default (non-daemon) output, which gives some immediate insights into timings and upstream DNS resolver performance. This also demonstrates the experimental 'client identification' feature which is optional as it adds about 10ms of latency:
 
 ![Non-Daemon Output Example with experimental 'client identification'](output2.png)
 
