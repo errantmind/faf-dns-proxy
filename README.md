@@ -20,7 +20,7 @@ An example of the default (non-daemon) output, which gives some immediate insigh
 ## Features
 
 - DNS filtering (e.g. adblock - experimental, disabled by default)
-- Query Tracing - Identify which process are issuing what queries on your computer (linux only, experimental, disabled by default)
+- Client identification - Identify which process are issuing what queries on your computer (linux only, experimental, disabled by default)
 - Full-duplex async design.
 - Minimal parsing of DNS records to lower overhead.
 - 'Shotgun' DNS queries to multiple upstream resolvers by default. The first reply wins.
