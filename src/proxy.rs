@@ -377,7 +377,7 @@ async fn handle_reads(
                      if !crate::statics::ARGS.daemon {
                         let fastest_count = crate::stats::Stats::array_increment_fastest(STATS.as_mut(), upstream_dns_index);
                         let mut output = format!(
-                           "{:>4}ms -> {:<46} {:>7} {:>3} {:<15} {:>5}",
+                           "{:>4}ms -> {:<46} {:>7} {:>3} {:>15} {:>7}",
                            elapsed_ms,
                            site_name,
                            qtype_str,
