@@ -1,6 +1,6 @@
 [package]
 name = "faf-dns-proxy"
-version = "0.7.0"
+version = "0.8.0"
 authors = ["James Bates <errantmind@protonmail.com>"]
 edition = "2021"
 
@@ -64,3 +64,10 @@ reqwest = "0.11.23"
 
 # chrono, parse rfc2822 dates from http Last-Modified header
 chrono = "0.4.31"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# get pid of sending process (if local machine)
+netlink-packet-core = "0.7.0"
+netlink-packet-sock-diag = "0.4.2"
+netlink-sys = "0.8.5"
+procfs = "0.16.0"

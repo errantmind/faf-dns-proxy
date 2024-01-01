@@ -17,7 +17,6 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
 use hashbrown::HashMap;
-use tokio::io::AsyncWriteExt;
 
 static mut STATS: once_cell::sync::Lazy<[crate::stats::Stats; crate::statics::DNS_SERVERS.len()]> =
    once_cell::sync::Lazy::new(crate::stats::init_stats);
@@ -68,7 +67,6 @@ pub async fn go(port: u16) {
       let mut query_buf = vec![0; 514];
 
       let mut cache_hits: u64 = 0;
-      let mut cache_hits_print_threshold = 16;
 
       loop {
          // We reserve the first 2 bytes for the message length which is required for DNS over TCP
@@ -84,8 +82,9 @@ pub async fn go(port: u16) {
 
          if crate::statics::ARGS.enable_blocklists {
             let question = crate::dns::get_question_as_string(udp_segment.as_ptr(), udp_segment.len());
-            let mut primary_domain = String::new();
 
+            // The blocklists are not accurate because they are derived from the browser regex filters. They exclude most subdomains.
+            let mut primary_domain = String::new();
             let parts: Vec<&str> = question.rsplitn(3, '.').collect();
             if parts.len() > 2 {
                primary_domain = format!("{}.{}", parts[1], parts[0]);
@@ -132,12 +131,8 @@ pub async fn go(port: u16) {
                         if elapsed_ms_vec.len() > 25 {
                            elapsed_ms_vec.sort_unstable();
                            let median = elapsed_ms_vec[elapsed_ms_vec.len() / 2];
-                           println!(
-                              "cache hits: {cache_hits_print_threshold}, median uncached query time: {median}ms, lowest: {}ms",
-                              elapsed_ms_vec[0]
-                           );
+                           println!("cache hits: {cache_hits}, median uncached query time: {median}ms, lowest: {}ms", elapsed_ms_vec[0]);
                         }
-                        cache_hits_print_threshold <<= 1;
                      }
                   }
 
@@ -272,6 +267,8 @@ async fn write(
    write_half: &mut tokio::io::WriteHalf<tokio_rustls::client::TlsStream<tokio::net::TcpStream>>,
    query_buf: Vec<u8>,
 ) -> Option<Vec<u8>> {
+   use tokio::io::AsyncWriteExt;
+
    match write_half.write_all(&query_buf).await {
       Ok(_) => match write_half.flush().await {
          Ok(_) => None,
@@ -336,16 +333,26 @@ async fn handle_reads(
                let cache_key = crate::dns::get_query_unique_id(udp_segment_no_tcp_prefix.as_ptr(), udp_segment_no_tcp_prefix.len());
                let mut cache_guard = DNS_ANSWER_CACHE.lock().await;
                if !cache_guard.contains_key(cache_key) {
-                  {
-                     // Scope for id_router_guard
+                  // copy the address for now to minimize chances of a collision
+                  let saved_addr = unsafe { BUF_ID_ROUTER[id as usize].to_owned() };
 
-                     let saved_addr = unsafe { BUF_ID_ROUTER[id as usize] };
-
-                     let wrote = listener_addr.send_to(udp_segment_no_tcp_prefix, &saved_addr).await.unwrap();
-
-                     if wrote == 0 {
-                        panic!("Wrote nothing to client after receiving data from upstream")
+                  #[cfg(target_os = "linux")]
+                  let stat_maybe: Option<procfs::process::Stat> = if crate::statics::ARGS.client_ident {
+                     // We have to check here because the clients often close their socket immediately after the write.
+                     let socket_info_maybe = crate::inspect_client::get_socket_info(&saved_addr);
+                     if let Some(socket_info) = socket_info_maybe {
+                        crate::inspect_client::find_pid_by_socket_inode(socket_info.header.inode as u64)
+                     } else {
+                        None
                      }
+                  } else {
+                     None
+                  };
+
+                  let wrote = listener_addr.send_to(udp_segment_no_tcp_prefix, &saved_addr).await.unwrap();
+
+                  if wrote == 0 {
+                     panic!("Wrote nothing to client after receiving data from upstream")
                   }
 
                   let elapsed_ms = crate::util::get_unix_ts_millis() - DNS_TIMING_CACHE.lock().await.get(cache_key).unwrap().asked_at;
@@ -369,15 +376,28 @@ async fn handle_reads(
                   unsafe {
                      if !crate::statics::ARGS.daemon {
                         let fastest_count = crate::stats::Stats::array_increment_fastest(STATS.as_mut(), upstream_dns_index);
-                        println!(
-                           "{:>4}ms -> {:<46} {:>7} {:>3} ({} [{}])",
+                        let mut output = format!(
+                           "{:>4}ms -> {:<46} {:>7} {:>3} {:<15} {:>5}",
                            elapsed_ms,
                            site_name,
                            qtype_str,
                            qclass_str,
                            format!("{}", crate::statics::DNS_SERVERS[upstream_dns_index].socket_addr.ip()).as_str(),
-                           fastest_count
+                           format!("[{}]", fastest_count),
                         );
+
+                        #[cfg(target_os = "linux")]
+                        if crate::statics::ARGS.client_ident {
+                           output = format!(
+                              "{} - {} ({}:{})",
+                              output,
+                              stat_maybe.map_or("UNKNOWN".to_string(), |x| format!("{}/{}", x.pid, x.comm)),
+                              saved_addr.ip(),
+                              saved_addr.port(),
+                           );
+                        }
+
+                        println!("{}", output);
                      }
                   }
                }

@@ -8,17 +8,19 @@ FaF has been tested on Linux, Mac (M1), and Windows, and may work on other platf
 
 An example of the default (non-daemon) output, which gives some immediate insights into timings and upstream DNS resolver performance:
 
-![Non-Daemon Output Example](output.png)
+![Non-Daemon Output Example with experimental 'client identification'](output2.png)
 
 ## Why Use This?
 
 - You want the fastest DNS resolution available because you notice it speeds up your web browsing experience, among other areas.
 - You don't want your ISP spying on your DNS queries.
 - You want something that 'just works' out-of-the-box, with the default configuration.
-- Perhaps you have noticed occasional, mysterious delays that add 2-10 seconds to some page loads when using some other resolvers with DoT / DoH.
+- Perhaps you noticed occasional, mysterious delays that add 2-10 seconds to some page loads when using some other resolvers with DoT / DoH.
 
 ## Features
 
+- DNS filtering (e.g. adblock - experimental, disabled by default)
+- Query Tracing - Identify which process are issuing what queries on your computer (linux only, experimental, disabled by default)
 - Full-duplex async design.
 - Minimal parsing of DNS records to lower overhead.
 - 'Shotgun' DNS queries to multiple upstream resolvers by default. The first reply wins.
@@ -82,6 +84,7 @@ If you have a problem, and suddenly realize you can't search the internet for an
 
 - By default, Firefox and some other browsers bypass the system's DNS, using their own built-in DoH. To reap the benefits of FaF while browsing, ensure this is disabled. This is usually somewhere in the browser's network settings.
 - Only IPv4 upstream DNS resolvers are currently supported.
+- Using the blocklist adds some delay as you might expect. In my tests the median overhead was about 10 microseconds locally.
 
 ## Code Tour
 

@@ -26,6 +26,9 @@ mod tls;
 mod util;
 
 #[cfg(target_os = "linux")]
+mod inspect_client;
+
+#[cfg(target_os = "linux")]
 #[global_allocator]
 static GLOBAL: tcmalloc::TCMalloc = tcmalloc::TCMalloc;
 
@@ -34,9 +37,8 @@ pub fn main() {
       print_banner();
       print_version();
    }
-   
 
-   tokio::runtime::Runtime::new().unwrap().block_on(proxy::go(53));
+   tokio::runtime::Runtime::new().unwrap().block_on(proxy::go(statics::ARGS.port));
 }
 
 fn print_banner() {

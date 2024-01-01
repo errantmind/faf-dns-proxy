@@ -22,19 +22,30 @@ use clap::Parser;
 #[derive(Parser, Debug, Default)]
 #[clap(author, version, about, long_about = None)]
 pub struct Args {
-   /// [optional] daemon mode, no logging output.
+   /// daemon mode, no logging output.
    #[clap(short, long)]
    pub daemon: bool,
 
-   /// [optional] enable SNI (Server Name Indication) for TLS connections to upstream DNS servers.
+   /// port
+   #[clap(short, long, default_value_t = 53)]
+   pub port: u16,
+
+   /// enable SNI (Server Name Indication) in TLS connections to upstream DNS servers.
    #[clap(long)]
    pub enable_sni: bool,
 
-   /// [optional] enable domain blocklists.
+   /// enable domain filtering from pre-defined blocklists.
    #[clap(long)]
    pub enable_blocklists: bool,
 
-   /// [optional] data directory to store blocklists. Defaults to the current working directory.
+   /// [Linux Only] attempt to find the source pid and program name for each dns request.
+   /// Requests must be local to the same host as faf-dns-proxy.
+   /// Requires root to identify privileged processes.
+   /// Adds significant overhead to each request, ballpark +10ms. Recommended for diagnostic use only.
+   #[clap(long)]
+   pub client_ident: bool,
+
+   /// data directory to store blocklists. Defaults to the current working directory.
    #[clap(long)]
    pub data_directory: Option<std::path::PathBuf>,
 }
