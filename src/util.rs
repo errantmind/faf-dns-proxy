@@ -40,27 +40,10 @@ pub fn is_power_of_2(num: u64) -> bool {
 }
 
 #[inline]
-pub fn encode_id_and_addr_to_u64(id: u16, addr: &std::net::SocketAddrV4) -> u64 {
-   let ip = u64::from(addr.ip().octets().iter().fold(0, |acc, &x| acc << 8 | u64::from(x)));
-   let port = u64::from(addr.port());
-   (ip << 16) | port | (u64::from(id) << 48)
-}
-
-#[inline]
-pub fn decude_u64_to_id_and_addr(encoded: u64) -> (u16, std::net::SocketAddrV4) {
-   let id = (encoded >> 48) as u16;
-   let port = (encoded & 0xFFFF) as u16;
-   let ip = encoded >> 16;
-   let ip = std::net::Ipv4Addr::new((ip >> 24) as u8, (ip >> 16) as u8, (ip >> 8) as u8, ip as u8);
-   (id, std::net::SocketAddrV4::new(ip, port))
-}
-
-/// Uses xxhash to hash a byte slice
-#[inline(always)]
-pub fn hash64(bytes: &[u8]) -> u64 {
-   use xxhash_rust::xxh3::xxh3_64;
-
-   xxh3_64(bytes)
+pub fn encode_id_and_hash32_to_u64(id: u16, hash32: u32) -> u64 {
+   let id = id as u64;
+   let hash32 = hash32 as u64;
+   (id << 32) | hash32
 }
 
 #[inline(always)]
@@ -138,14 +121,4 @@ pub fn is_power_of_2_test() {
    assert!(is_power_of_2(2305843009213693952));
    assert!(is_power_of_2(4611686018427387904));
    assert!(is_power_of_2(9223372036854775808));
-}
-
-#[test]
-fn test_encode_decode() {
-   let addr = std::net::SocketAddrV4::new(std::net::Ipv4Addr::new(127, 0, 0, 1), 53);
-   let id = 0x1234;
-   let encoded = encode_id_and_addr_to_u64(id, &addr);
-   let (decoded_id, decoded_addr) = decude_u64_to_id_and_addr(encoded);
-   assert_eq!(id, decoded_id);
-   assert_eq!(addr, decoded_addr);
 }

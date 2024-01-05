@@ -83,6 +83,7 @@ pub fn map_qclass_to_str(qclass: u16) -> &'static str {
    }
 }
 
+
 /// Walks one question in the query (QNAME, QTYPE, QCLASS) and returns these bytes a slice of the buffer
 #[inline]
 pub fn get_query_unique_id<'a>(dns_buf_start: *const u8, len: usize) -> &'a [u8] {
