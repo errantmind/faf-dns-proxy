@@ -16,8 +16,6 @@ You should have received a copy of the GNU Affero General Public License
 along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
-use hashbrown::HashMap;
-
 static mut STATS: once_cell::sync::Lazy<[crate::stats::Stats; crate::statics::DNS_SERVERS.len()]> =
    once_cell::sync::Lazy::new(crate::stats::init_stats);
 
@@ -34,12 +32,12 @@ struct AnswerCacheEntry {
 lazy_static::lazy_static! {
 
    // Stores when questions are asked
-   static ref DNS_TIMING_CACHE: tokio::sync::Mutex<HashMap<Vec<u8>, TimingCacheEntry>> =
-      tokio::sync::Mutex::new(HashMap::with_capacity(4096));
+   static ref DNS_TIMING_CACHE: dashmap::DashMap<Vec<u8>, TimingCacheEntry> =
+      dashmap::DashMap::with_capacity(4096);
 
    // Stores when questions are answered, as well as when they expire and how long it took to answer
-   static ref DNS_ANSWER_CACHE: tokio::sync::Mutex<HashMap<Vec<u8>, AnswerCacheEntry>> =
-      tokio::sync::Mutex::new(HashMap::with_capacity(4096));
+   static ref DNS_ANSWER_CACHE: dashmap::DashMap<Vec<u8>, AnswerCacheEntry> =
+      dashmap::DashMap::with_capacity(4096);
 
    // Stores lists of blocked domains loaded from blocklists
    static ref BLOCKLISTS: tokio::sync::Mutex<Vec<crate::blocklist::BlocklistFile>> = tokio::sync::Mutex::new(Vec::new());
@@ -49,18 +47,21 @@ lazy_static::lazy_static! {
    // when we receive a response from an upstream server we need to know which client to send it to. So, to route responses
    // to the correct client, we need to identify the correct client with something in the response itself, which knows nothing of
    // the client. We use a combination of the ID and the QNAME, QTYPE, and QCLASS of the Question (all of which are unchanged
-   // in the response) to identify the client. The chance of a collision is negligible, even more so since this applies to uncached
-   // requests.
-   // Technically, we are using a DashMap (hashmap) for thread safety with a NoHashHasher for additional performance (which is a
-   // no-op hasher) over particular types like the u64.
+   // in the response) to identify the client. The chance of a collision is negligible, even more so since this applies only
+   // to uncached requests.
+   // We use a DashMap (hashmap) for thread safety with a NoHashHasher for additional performance (which is a
+   // no-op hasher) over particular types like u64.
    static ref BUF_ID_ROUTER: dashmap::DashMap<u64, std::net::SocketAddrV4, nohash_hasher::BuildNoHashHasher<u64>> =
       dashmap::DashMap::default();
 }
 
 pub async fn go(port: u16) {
    let proxy = tokio::task::spawn(async move {
-      let listener_addr = std::net::SocketAddrV4::new(std::net::Ipv4Addr::UNSPECIFIED, port);
-      let listener_socket = std::sync::Arc::new(tokio::net::UdpSocket::bind(listener_addr).await.unwrap());
+      let listener_socket = {
+         let listener_addr = std::net::SocketAddrV4::new(std::net::Ipv4Addr::UNSPECIFIED, port);
+         std::sync::Arc::new(tokio::net::UdpSocket::bind(listener_addr).await.unwrap())
+      };
+
       let mut tx_channels: Vec<kanal::AsyncSender<Vec<u8>>> = Vec::with_capacity(crate::statics::DNS_SERVERS.len());
 
       for (dns_server_index, _) in crate::statics::DNS_SERVERS.iter().enumerate() {
@@ -131,56 +132,52 @@ pub async fn go(port: u16) {
          let id = crate::dns::get_id_network_byte_order(udp_segment.as_ptr(), udp_segment.len());
          let cache_key = crate::dns::get_query_unique_id(udp_segment.as_ptr(), udp_segment.len());
 
-         {
-            // Scope for cache guard.
-            // First check the ANSWER cache and respond immediately if we already have an answer to the query
+         // First check the ANSWER cache and respond immediately if we already have an answer to the query
 
-            let mut answer_cache_guard = DNS_ANSWER_CACHE.lock().await;
-            let cached_response_maybe = answer_cache_guard.get_mut(cache_key);
+         if let Some(mut cached_response) = DNS_ANSWER_CACHE.get_mut(cache_key) {
+            if cached_response.expires_at > crate::util::get_unix_ts_secs() {
+               crate::dns::set_id_network_byte_order(id, &mut cached_response.answer);
+               let wrote_len_maybe = listener_socket.send_to(&cached_response.answer, &client_addr).await;
 
-            if let Some(cached_response) = cached_response_maybe {
-               if cached_response.expires_at > crate::util::get_unix_ts_secs() {
-                  crate::dns::set_id_network_byte_order(id, &mut cached_response.answer);
-                  let wrote_len_maybe = listener_socket.send_to(&cached_response.answer, &client_addr).await;
+               drop(cached_response);
 
-                  if let Ok(wrote_len) = wrote_len_maybe {
-                     // Due to how rust implements IO for send_to, we will never have a len_written less than 0
-                     if wrote_len == 0 {
-                        eprintln!("Failed to write response to the client. 0 bytes written at {}:{}", file!(), line!());
-                        continue;
-                     }
-                  } else {
-                     eprintln!(
-                        "Failed to write cached response to the client with error: {} at {}:{}",
-                        wrote_len_maybe.unwrap_err(),
-                        file!(),
-                        line!()
-                     );
+               if let Ok(wrote_len) = wrote_len_maybe {
+                  // Due to how rust implements IO for send_to, we will never have a len_written less than 0
+                  if wrote_len == 0 {
+                     eprintln!("Failed to write response to the client. 0 bytes written at {}:{}", file!(), line!());
                      continue;
                   }
+               } else {
+                  eprintln!(
+                     "Failed to write cached response to the client with error: {} at {}:{}",
+                     wrote_len_maybe.unwrap_err(),
+                     file!(),
+                     line!()
+                  );
+                  continue;
+               }
 
-                  if !crate::statics::ARGS.daemon {
-                     cache_hits += 1;
-                     if cache_hits >= 16 && crate::util::is_power_of_2(cache_hits) {
-                        let mut elapsed_ms_vec: Vec<u64> = answer_cache_guard.values().map(|x| x.elapsed_ms as u64).collect();
-                        if elapsed_ms_vec.len() > 25 {
-                           elapsed_ms_vec.sort_unstable();
-                           let median = elapsed_ms_vec[elapsed_ms_vec.len() / 2];
-                           println!("cache hits: {cache_hits}, median uncached query time: {median}ms, lowest: {}ms", elapsed_ms_vec[0]);
-                        }
+               if !crate::statics::ARGS.daemon {
+                  cache_hits += 1;
+                  if cache_hits >= 16 && crate::util::is_power_of_2(cache_hits) {
+                     let mut elapsed_ms_vec: Vec<u64> = DNS_ANSWER_CACHE.iter().map(|x| x.elapsed_ms as u64).collect();
+                     if elapsed_ms_vec.len() > 25 {
+                        elapsed_ms_vec.sort_unstable();
+                        let median = elapsed_ms_vec[elapsed_ms_vec.len() / 2];
+                        println!("cache hits: {cache_hits}, median uncached query time: {median}ms, lowest: {}ms", elapsed_ms_vec[0]);
                      }
                   }
-
-                  continue;
-               } else {
-                  answer_cache_guard.remove_entry(cache_key);
                }
+
+               continue;
+            } else {
+               DNS_ANSWER_CACHE.remove(cache_key);
             }
          }
 
          {
             // We don't have it cached. Add to QUESTION cache
-            DNS_TIMING_CACHE.lock().await.insert(cache_key.to_vec(), TimingCacheEntry { asked_at: crate::util::get_unix_ts_millis() });
+            DNS_TIMING_CACHE.insert(cache_key.to_vec(), TimingCacheEntry { asked_at: crate::util::get_unix_ts_millis() });
          }
 
          // Save the client state
@@ -370,8 +367,7 @@ async fn handle_reads(
             {
                let id = crate::dns::get_id_network_byte_order(udp_segment_no_tcp_prefix.as_ptr(), udp_segment_no_tcp_prefix.len());
                let cache_key = crate::dns::get_query_unique_id(udp_segment_no_tcp_prefix.as_ptr(), udp_segment_no_tcp_prefix.len());
-               let mut cache_guard = DNS_ANSWER_CACHE.lock().await;
-               if !cache_guard.contains_key(cache_key) {
+               if !DNS_ANSWER_CACHE.contains_key(cache_key) {
                   // copy the address for now to minimize chances of a collision
                   let saved_addr =
                      BUF_ID_ROUTER.get(&crate::util::encode_id_and_hash32_to_u64(id, crate::util::hash32(cache_key))).unwrap();
@@ -405,7 +401,7 @@ async fn handle_reads(
                      );
                   }
 
-                  let elapsed_ms = crate::util::get_unix_ts_millis() - DNS_TIMING_CACHE.lock().await.get(cache_key).unwrap().asked_at;
+                  let elapsed_ms = crate::util::get_unix_ts_millis() - DNS_TIMING_CACHE.get(cache_key).unwrap().asked_at;
 
                   let (site_name, qtype_str, qclass_str, mut ttl) =
                      crate::dns::get_question_as_string_and_lowest_ttl(udp_segment_no_tcp_prefix.as_ptr(), udp_segment_no_tcp_prefix.len());
@@ -414,7 +410,7 @@ async fn handle_reads(
                      ttl = crate::statics::MINIMUM_TTL_OVERRIDE;
                   }
 
-                  cache_guard.insert(
+                  DNS_ANSWER_CACHE.insert(
                      cache_key.to_vec(),
                      AnswerCacheEntry {
                         answer: udp_segment_no_tcp_prefix.to_vec(),
