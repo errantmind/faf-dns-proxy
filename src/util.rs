@@ -18,7 +18,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 /// Gets duration since UNIX_EPOCH in milliseconds
 #[inline]
-pub fn get_unix_ts_nanos() -> u128 {
+pub fn _get_unix_ts_nanos() -> u128 {
    std::time::SystemTime::now().duration_since(std::time::SystemTime::UNIX_EPOCH).unwrap().as_nanos()
 }
 
@@ -37,4 +37,115 @@ pub fn get_unix_ts_secs() -> u64 {
 #[inline]
 pub fn is_power_of_2(num: u64) -> bool {
    num & (num - 1) == 0
+}
+
+#[inline]
+pub fn encode_id_and_addr_to_u64(id: u16, addr: &std::net::SocketAddrV4) -> u64 {
+   let ip = u64::from(addr.ip().octets().iter().fold(0, |acc, &x| acc << 8 | u64::from(x)));
+   let port = u64::from(addr.port());
+   (ip << 16) | port | (u64::from(id) << 48)
+}
+
+#[inline]
+pub fn decude_u64_to_id_and_addr(encoded: u64) -> (u16, std::net::SocketAddrV4) {
+   let id = (encoded >> 48) as u16;
+   let port = (encoded & 0xFFFF) as u16;
+   let ip = encoded >> 16;
+   let ip = std::net::Ipv4Addr::new((ip >> 24) as u8, (ip >> 16) as u8, (ip >> 8) as u8, ip as u8);
+   (id, std::net::SocketAddrV4::new(ip, port))
+}
+
+/// Uses xxhash to hash a byte slice
+#[inline(always)]
+pub fn hash64(bytes: &[u8]) -> u64 {
+   use xxhash_rust::xxh3::xxh3_64;
+
+   xxh3_64(bytes)
+}
+
+#[inline(always)]
+pub fn hash32(bytes: &[u8]) -> u32 {
+   use xxhash_rust::xxh3::xxh3_64;
+
+   let long_hash = xxh3_64(bytes);
+   let bitwise_xor_fold = (long_hash >> 32) ^ (long_hash & (!0u64 >> 32));
+   bitwise_xor_fold as u32
+}
+
+#[test]
+pub fn is_power_of_2_test() {
+   assert!(is_power_of_2(1));
+   assert!(is_power_of_2(2));
+   assert!(is_power_of_2(4));
+   assert!(is_power_of_2(8));
+   assert!(is_power_of_2(16));
+   assert!(is_power_of_2(32));
+   assert!(is_power_of_2(64));
+   assert!(is_power_of_2(128));
+   assert!(is_power_of_2(256));
+   assert!(is_power_of_2(512));
+   assert!(is_power_of_2(1024));
+   assert!(is_power_of_2(2048));
+   assert!(is_power_of_2(4096));
+   assert!(is_power_of_2(8192));
+   assert!(is_power_of_2(16384));
+   assert!(is_power_of_2(32768));
+   assert!(is_power_of_2(65536));
+   assert!(is_power_of_2(131072));
+   assert!(is_power_of_2(262144));
+   assert!(is_power_of_2(524288));
+   assert!(is_power_of_2(1048576));
+   assert!(is_power_of_2(2097152));
+   assert!(is_power_of_2(4194304));
+   assert!(is_power_of_2(8388608));
+   assert!(is_power_of_2(16777216));
+   assert!(is_power_of_2(33554432));
+   assert!(is_power_of_2(67108864));
+   assert!(is_power_of_2(134217728));
+   assert!(is_power_of_2(268435456));
+   assert!(is_power_of_2(536870912));
+   assert!(is_power_of_2(1073741824));
+   assert!(is_power_of_2(2147483648));
+   assert!(is_power_of_2(4294967296));
+   assert!(is_power_of_2(8589934592));
+   assert!(is_power_of_2(17179869184));
+   assert!(is_power_of_2(34359738368));
+   assert!(is_power_of_2(68719476736));
+   assert!(is_power_of_2(137438953472));
+   assert!(is_power_of_2(274877906944));
+   assert!(is_power_of_2(549755813888));
+   assert!(is_power_of_2(1099511627776));
+   assert!(is_power_of_2(2199023255552));
+   assert!(is_power_of_2(4398046511104));
+   assert!(is_power_of_2(8796093022208));
+   assert!(is_power_of_2(17592186044416));
+   assert!(is_power_of_2(35184372088832));
+   assert!(is_power_of_2(70368744177664));
+   assert!(is_power_of_2(140737488355328));
+   assert!(is_power_of_2(281474976710656));
+   assert!(is_power_of_2(562949953421312));
+   assert!(is_power_of_2(1125899906842624));
+   assert!(is_power_of_2(2251799813685248));
+   assert!(is_power_of_2(4503599627370496));
+   assert!(is_power_of_2(9007199254740992));
+   assert!(is_power_of_2(18014398509481984));
+   assert!(is_power_of_2(36028797018963968));
+   assert!(is_power_of_2(72057594037927936));
+   assert!(is_power_of_2(144115188075855872));
+   assert!(is_power_of_2(288230376151711744));
+   assert!(is_power_of_2(576460752303423488));
+   assert!(is_power_of_2(1152921504606846976));
+   assert!(is_power_of_2(2305843009213693952));
+   assert!(is_power_of_2(4611686018427387904));
+   assert!(is_power_of_2(9223372036854775808));
+}
+
+#[test]
+fn test_encode_decode() {
+   let addr = std::net::SocketAddrV4::new(std::net::Ipv4Addr::new(127, 0, 0, 1), 53);
+   let id = 0x1234;
+   let encoded = encode_id_and_addr_to_u64(id, &addr);
+   let (decoded_id, decoded_addr) = decude_u64_to_id_and_addr(encoded);
+   assert_eq!(id, decoded_id);
+   assert_eq!(addr, decoded_addr);
 }

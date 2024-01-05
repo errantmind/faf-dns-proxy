@@ -38,6 +38,8 @@ clap = { version = "4.4.11", default-features = true, features = ["derive"] }
 lazy_static = "1.4.0"
 once_cell = "1.19.0"
 webpki-roots = "0.26.0"
+
+dashmap = "5.5.3"
 hashbrown = { version = "0.14.3", default-features = true, features = ["inline-more", "ahash"] }
 
 # faster channel
@@ -64,6 +66,13 @@ reqwest = "0.11.23"
 
 # chrono, parse rfc2822 dates from http Last-Modified header
 chrono = "0.4.31"
+
+# fast hasher
+xxhash-rust = { version = "0.8.8", features = ["xxh3"] }
+
+# faster hasher for keys that are particular primitives
+nohash-hasher = "0.2.0"
+
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # get pid of sending process (if local machine)

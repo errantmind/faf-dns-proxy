@@ -5,7 +5,7 @@ lazy_static::lazy_static! {
 // ref: https://man7.org/linux/man-pages/man7/netlink.7.html
 // ref: https://man7.org/linux/man-pages/man7/sock_diag.7.html
 // ref: https://github.com/rust-netlink/netlink-packet-sock-diag/blob/main/examples/dump_ipv4.rs
-pub fn get_socket_info(source_socket: &std::net::SocketAddr) -> Option<Box<netlink_packet_sock_diag::inet::InetResponse>> {
+pub fn get_socket_info(source_socket: &std::net::SocketAddrV4) -> Option<Box<netlink_packet_sock_diag::inet::InetResponse>> {
    use netlink_packet_core::{NetlinkHeader, NetlinkMessage, NetlinkPayload, NLM_F_DUMP, NLM_F_REQUEST};
    use netlink_packet_sock_diag::{
       constants::*,
@@ -58,7 +58,11 @@ pub fn get_socket_info(source_socket: &std::net::SocketAddr) -> Option<Box<netli
          match rx_packet.payload {
             NetlinkPayload::Noop => {}
             NetlinkPayload::InnerMessage(SockDiagMessage::InetResponse(response)) => {
-               if response.header.socket_id.source_address == source_socket.ip()
+               let source_ipv4 = match response.header.socket_id.source_address {
+                  std::net::IpAddr::V4(ip) => ip,
+                  _ => unreachable!(),
+               };
+               if &source_ipv4 == source_socket.ip()
                   && response.header.socket_id.source_port == source_socket.port()
                   && response.header.socket_id.destination_port == crate::statics::ARGS.port
                {

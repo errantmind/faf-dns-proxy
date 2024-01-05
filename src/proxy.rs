@@ -35,30 +35,42 @@ const CONN_ERROR_SLEEP_MS: u64 = 1000;
 
 lazy_static::lazy_static! {
    static ref DNS_TIMING_CACHE: tokio::sync::Mutex<HashMap<Vec<u8>, TimingCacheEntry>> =
-   tokio::sync::Mutex::new(HashMap::with_capacity(4096));
+      tokio::sync::Mutex::new(HashMap::with_capacity(4096));
 
    static ref DNS_ANSWER_CACHE: tokio::sync::Mutex<HashMap<Vec<u8>, AnswerCacheEntry>> =
-   tokio::sync::Mutex::new(HashMap::with_capacity(4096));
+      tokio::sync::Mutex::new(HashMap::with_capacity(4096));
 
    static ref BLOCKLISTS: tokio::sync::Mutex<Vec<crate::blocklist::BlocklistFile>> = tokio::sync::Mutex::new(Vec::new());
+
+   // static ref BUF_ID_ROUTER2: tokio::sync::Mutex<HashMap<u64, std::net::SocketAddrV4, nohash_hasher::BuildNoHashHasher<u64>>> =
+   //    tokio::sync::Mutex::new(HashMap::default());
+
+   // static ref BUF_ID_ROUTER3: dashmap::DashMap<u64, std::net::SocketAddrV4, nohash_hasher::BuildNoHashHasher<u64>> =
+   //    dashmap::DashMap::default();
 }
 
 // We route DNS responses by the id they provided in the initial request. This may occasionally cause
 // timing collisions but they should be very rare. There is a 1 / 2^16 chance of a collision, but even then
 // only if the requests arrive around the exact same time with the same id. Note, cached responses are not
 // affected by this, which makes the odds even lower.
-static mut BUF_ID_ROUTER: [std::net::SocketAddr; u16::MAX as usize + 1] =
-   [std::net::SocketAddr::V4(std::net::SocketAddrV4::new(std::net::Ipv4Addr::UNSPECIFIED, 0)); u16::MAX as usize + 1];
+// Also, we align the struct to 64 bytes to avoid false sharing.
+// Also, we use SocketAddrV4 variant instead of just SocketAddr to reduce the size to 8 bytes which
+// can be atomically written on 64 bit systems
+#[derive(Copy, Clone)]
+#[repr(align(64))]
+pub struct AlignedSocketAddr(pub std::net::SocketAddrV4);
+static mut BUF_ID_ROUTER: [AlignedSocketAddr; u16::MAX as usize + 1] =
+   [AlignedSocketAddr(std::net::SocketAddrV4::new(std::net::Ipv4Addr::UNSPECIFIED, 0)); u16::MAX as usize + 1];
 
 pub async fn go(port: u16) {
    let proxy = tokio::task::spawn(async move {
       let listener_addr = std::net::SocketAddrV4::new(std::net::Ipv4Addr::UNSPECIFIED, port);
       let listener_socket = std::sync::Arc::new(tokio::net::UdpSocket::bind(listener_addr).await.unwrap());
-
-      let mut tx_channels = Vec::with_capacity(crate::statics::DNS_SERVERS.len());
+      let mut tx_channels: Vec<kanal::AsyncSender<(Vec<u8>, std::net::SocketAddrV4)>> =
+         Vec::with_capacity(crate::statics::DNS_SERVERS.len());
 
       for (dns_server_index, _) in crate::statics::DNS_SERVERS.iter().enumerate() {
-         let (tx, rx) = kanal::bounded_async(8192);
+         let (tx, rx) = kanal::bounded_async::<(Vec<u8>, std::net::SocketAddrV4)>(8192);
          tokio::task::spawn(upstream_tls_handler(rx, dns_server_index, listener_socket.clone()));
          tx_channels.push(tx);
       }
@@ -96,8 +108,22 @@ pub async fn go(port: u16) {
                   || (!primary_domain.is_empty() && blocklist_file.blocked_domains.contains(&primary_domain))
                {
                   crate::dns::mutate_question_into_bogus_response(udp_segment);
-                  let wrote = listener_socket.send_to(udp_segment, &client_addr).await.unwrap();
-                  assert!(wrote != 0, "Response is blocked but we wrote nothing to client");
+                  let wrote_len_maybe = listener_socket.send_to(udp_segment, &client_addr).await;
+
+                  if let Ok(wrote_len) = wrote_len_maybe {
+                     // Due to how rust implements IO for send_to, we will never have a len_written less than 0
+                     if wrote_len == 0 {
+                        eprintln!("Failed to write blocked response to the client. 0 bytes written at {}:{}", file!(), line!());
+                     }
+                  } else {
+                     eprintln!(
+                        "Failed to write cached response to the client with error: {} at {}:{}",
+                        wrote_len_maybe.unwrap_err(),
+                        file!(),
+                        line!()
+                     );
+                  }
+
                   domain_is_blocked = true;
                   break;
                }
@@ -121,8 +147,23 @@ pub async fn go(port: u16) {
             if let Some(cached_response) = cached_response_maybe {
                if cached_response.expires_at > crate::util::get_unix_ts_secs() {
                   crate::dns::set_id_network_byte_order(id, &mut cached_response.answer);
-                  let wrote = listener_socket.send_to(&cached_response.answer, &client_addr).await.unwrap();
-                  assert!(wrote != 0, "Wrote nothing to client after fetching data from cache");
+                  let wrote_len_maybe = listener_socket.send_to(&cached_response.answer, &client_addr).await;
+
+                  if let Ok(wrote_len) = wrote_len_maybe {
+                     // Due to how rust implements IO for send_to, we will never have a len_written less than 0
+                     if wrote_len == 0 {
+                        eprintln!("Failed to write response to the client. 0 bytes written at {}:{}", file!(), line!());
+                        continue;
+                     }
+                  } else {
+                     eprintln!(
+                        "Failed to write cached response to the client with error: {} at {}:{}",
+                        wrote_len_maybe.unwrap_err(),
+                        file!(),
+                        line!()
+                     );
+                     continue;
+                  }
 
                   if !crate::statics::ARGS.daemon {
                      cache_hits += 1;
@@ -144,18 +185,20 @@ pub async fn go(port: u16) {
          }
 
          {
-            // We don't have it cached. Add to QUESTION cache for
-
+            // We don't have it cached. Add to QUESTION cache
             DNS_TIMING_CACHE.lock().await.insert(cache_key.to_vec(), TimingCacheEntry { asked_at: crate::util::get_unix_ts_millis() });
          }
 
          // Save the client state
-         unsafe { BUF_ID_ROUTER[id as usize] = client_addr };
+         let client_addr_ipv4 = match client_addr {
+            std::net::SocketAddr::V4(value) => value,
+            _ => std::unreachable!(),
+         };
 
          // Write both bytes at once after converting to Big Endian
          unsafe { *(query_buf.as_mut_ptr() as *mut u16) = (read_bytes as u16).to_be() };
          for tx in &tx_channels {
-            match tx.send(query_buf[0..read_bytes + 2].to_vec()).await {
+            match tx.send((query_buf[0..read_bytes + 2].to_vec(), client_addr_ipv4)).await {
                Ok(_) => (),
                Err(err) => panic!("{}", err),
             };
@@ -172,7 +215,7 @@ pub async fn go(port: u16) {
 }
 
 pub async fn upstream_tls_handler(
-   client_msg_rx: kanal::AsyncReceiver<Vec<u8>>,
+   client_msg_rx: kanal::AsyncReceiver<(Vec<u8>, std::net::SocketAddrV4)>,
    upstream_dns_index: usize,
    listener_addr: std::sync::Arc<tokio::net::UdpSocket>,
 ) {
@@ -222,10 +265,10 @@ pub async fn upstream_tls_handler(
 
 async fn handle_writes(
    mut write_half: tokio::io::WriteHalf<tokio_rustls::client::TlsStream<tokio::net::TcpStream>>,
-   msg_rx: kanal::AsyncReceiver<Vec<u8>>,
+   msg_rx: kanal::AsyncReceiver<(Vec<u8>, std::net::SocketAddrV4)>,
    unsent_previous_query_maybe: Option<Vec<u8>>,
    mut shutdown_writer_rx: tokio::sync::oneshot::Receiver<bool>,
-) -> (kanal::AsyncReceiver<Vec<u8>>, Option<Vec<u8>>) {
+) -> (kanal::AsyncReceiver<(Vec<u8>, std::net::SocketAddrV4)>, Option<Vec<u8>>) {
    // In the event we had an issue previously, we begin by resuming the previous failed request
    if let Some(unsent_previous_query) = unsent_previous_query_maybe {
       if let Some(unsent_data) = write(&mut write_half, unsent_previous_query).await {
@@ -246,7 +289,7 @@ async fn handle_writes(
          },
          query_msg = msg_rx.recv() => {
             match query_msg {
-               Ok(data) => match write(&mut write_half, data).await {
+               Ok(data) => match write(&mut write_half, data.0).await {
                   Some(unsent_data) => {
                      // Qeury failed
                      return (msg_rx, Some(unsent_data))
@@ -334,7 +377,7 @@ async fn handle_reads(
                let mut cache_guard = DNS_ANSWER_CACHE.lock().await;
                if !cache_guard.contains_key(cache_key) {
                   // copy the address for now to minimize chances of a collision
-                  let saved_addr = unsafe { BUF_ID_ROUTER[id as usize].to_owned() };
+                  let saved_addr = unsafe { BUF_ID_ROUTER[id as usize].to_owned().0 };
 
                   #[cfg(target_os = "linux")]
                   let stat_maybe: Option<procfs::process::Stat> = if crate::statics::ARGS.client_ident {
@@ -349,10 +392,20 @@ async fn handle_reads(
                      None
                   };
 
-                  let wrote = listener_addr.send_to(udp_segment_no_tcp_prefix, &saved_addr).await.unwrap();
+                  let wrote_len_maybe = listener_addr.send_to(udp_segment_no_tcp_prefix, &saved_addr).await;
 
-                  if wrote == 0 {
-                     panic!("Wrote nothing to client after receiving data from upstream")
+                  if let Ok(wrote_len) = wrote_len_maybe {
+                     // Due to how rust implements IO for send_to, we will never have a len_written less than 0
+                     if wrote_len == 0 {
+                        eprintln!("Failed to write response to the client. 0 bytes written at {}:{}", file!(), line!());
+                     }
+                  } else {
+                     eprintln!(
+                        "Failed to write cached response to the client with error: {} at {}:{}",
+                        wrote_len_maybe.unwrap_err(),
+                        file!(),
+                        line!()
+                     );
                   }
 
                   let elapsed_ms = crate::util::get_unix_ts_millis() - DNS_TIMING_CACHE.lock().await.get(cache_key).unwrap().asked_at;
