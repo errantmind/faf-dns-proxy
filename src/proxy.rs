@@ -31,17 +31,28 @@ struct AnswerCacheEntry {
    expires_at: u64,
 }
 
-const CONN_ERROR_SLEEP_MS: u64 = 1000;
-
 lazy_static::lazy_static! {
+
+   // Stores when questions are asked
    static ref DNS_TIMING_CACHE: tokio::sync::Mutex<HashMap<Vec<u8>, TimingCacheEntry>> =
       tokio::sync::Mutex::new(HashMap::with_capacity(4096));
 
+   // Stores when questions are answered, as well as when they expire and how long it took to answer
    static ref DNS_ANSWER_CACHE: tokio::sync::Mutex<HashMap<Vec<u8>, AnswerCacheEntry>> =
       tokio::sync::Mutex::new(HashMap::with_capacity(4096));
 
+   // Stores lists of blocked domains loaded from blocklists
    static ref BLOCKLISTS: tokio::sync::Mutex<Vec<crate::blocklist::BlocklistFile>> = tokio::sync::Mutex::new(Vec::new());
 
+
+   // When we receive a request from a client, we may have the answer cached or we will request it from upstream. However,
+   // when we receive a response from an upstream server we need to know which client to send it to. So, to route responses
+   // to the correct client, we need to identify the correct client with something in the response itself, which knows nothing of
+   // the client. We use a combination of the ID and the QNAME, QTYPE, and QCLASS of the Question (all of which are unchanged
+   // in the response) to identify the client. The chance of a collision is negligible, even more so since this applies to uncached
+   // requests.
+   // Technically, we are using a DashMap (hashmap) for thread safety with a NoHashHasher for additional performance (which is a
+   // no-op hasher) over particular types like the u64.
    static ref BUF_ID_ROUTER: dashmap::DashMap<u64, std::net::SocketAddrV4, nohash_hasher::BuildNoHashHasher<u64>> =
       dashmap::DashMap::default();
 }
@@ -456,6 +467,8 @@ async fn connect(
    tls_connector: &tokio_rustls::TlsConnector,
    upstream_dns: &crate::statics::UpstreamDnsServer,
 ) -> tokio_rustls::client::TlsStream<tokio::net::TcpStream> {
+   const CONN_ERROR_SLEEP_MS: u64 = 1000;
+
    let mut connection_failures = 0;
    let mut tls_failures = 0;
 
