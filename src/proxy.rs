@@ -132,8 +132,8 @@ pub async fn go(port: u16) {
          let id = crate::dns::get_id_network_byte_order(udp_segment.as_ptr(), udp_segment.len());
          let cache_key = crate::dns::get_query_unique_id(udp_segment.as_ptr(), udp_segment.len());
 
-         // First check the ANSWER cache and respond immediately if we already have an answer to the query
 
+         // First check the ANSWER cache and respond immediately if we already have an answer to the query
          if let Some(mut cached_response) = DNS_ANSWER_CACHE.get_mut(cache_key) {
             if cached_response.expires_at > crate::util::get_unix_ts_secs() {
                crate::dns::set_id_network_byte_order(id, &mut cached_response.answer);
@@ -171,9 +171,10 @@ pub async fn go(port: u16) {
 
                continue;
             } else {
+               drop(cached_response);
                DNS_ANSWER_CACHE.remove(cache_key);
             }
-         }
+         }    
 
          {
             // We don't have it cached. Add to QUESTION cache
@@ -186,7 +187,9 @@ pub async fn go(port: u16) {
             _ => std::unreachable!(),
          };
          let cache_key = crate::dns::get_query_unique_id(udp_segment.as_ptr(), udp_segment.len());
-         BUF_ID_ROUTER.insert(crate::util::encode_id_and_hash32_to_u64(id, crate::util::hash32(cache_key)), client_addr_ipv4);
+         {
+            BUF_ID_ROUTER.insert(crate::util::encode_id_and_hash32_to_u64(id, crate::util::hash32(cache_key)), client_addr_ipv4);
+         }
 
          // Write both bytes at once after converting to Big Endian
          unsafe { *(query_buf.as_mut_ptr() as *mut u16) = (read_bytes as u16).to_be() };
@@ -401,7 +404,7 @@ async fn handle_reads(
                      );
                   }
 
-                  let elapsed_ms = crate::util::get_unix_ts_millis() - DNS_TIMING_CACHE.get(cache_key).unwrap().asked_at;
+                  let elapsed_ms = { crate::util::get_unix_ts_millis() - DNS_TIMING_CACHE.get(cache_key).unwrap().asked_at };
 
                   let (site_name, qtype_str, qclass_str, mut ttl) =
                      crate::dns::get_question_as_string_and_lowest_ttl(udp_segment_no_tcp_prefix.as_ptr(), udp_segment_no_tcp_prefix.len());
