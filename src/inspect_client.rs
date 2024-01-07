@@ -88,12 +88,13 @@ pub fn get_socket_info(source_socket: &std::net::SocketAddrV4) -> Option<Box<net
 
 // ref: https://github.com/eminence/procfs/blob/master/procfs/examples/netstat.rs
 pub fn find_pid_by_socket_inode(inode: u64) -> Option<procfs::process::Stat> {
-   let mut stats_maybe: Option<procfs::process::Stat> = None;
 
-   if let Ok(all_procs) = ALL_PROCESSES.try_lock() {
+   let mut stats_maybe: Option<procfs::process::Stat> = if let Ok(all_procs) = ALL_PROCESSES.try_lock() {
       // fast path, if we find the stats in the cached list of processes we can avoid the expensive procfs::process::all_processes() call
-      stats_maybe = find_stats_for_inode(&all_procs, inode);
-   }
+      find_stats_for_inode(&all_procs, inode)
+   } else {
+      None
+   };
 
    if stats_maybe.is_none() {
       // slow path
@@ -107,7 +108,7 @@ pub fn find_pid_by_socket_inode(inode: u64) -> Option<procfs::process::Stat> {
    stats_maybe
 }
 
-pub fn find_stats_for_inode(all_procs: &[procfs::process::Process], inode: u64) -> Option<procfs::process::Stat> {
+fn find_stats_for_inode(all_procs: &[procfs::process::Process], inode: u64) -> Option<procfs::process::Stat> {
    for process in all_procs.iter() {
       if let (Ok(stat), Ok(fds)) = (process.stat(), process.fd()) {
          for fd in fds {
