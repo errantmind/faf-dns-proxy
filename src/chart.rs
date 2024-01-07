@@ -1,11 +1,17 @@
 /// Generate a chart of the latencies.
+#[inline]
 pub fn generate_chart(latencies: Vec<u64>) -> anyhow::Result<(), Box<dyn std::error::Error>> {
    assert!(!latencies.is_empty());
 
    // The latencies must already be sorted.
-   let max_value = latencies.last().unwrap();
-   let range_size: u64 = 5;
-   let num_ranges = (max_value / range_size) as usize + 1;
+   let max_value = *latencies.last().unwrap();
+   let mut range_size: u64 = 5;
+   let get_num_ranges = |max_value: u64, range_size: u64| (max_value / range_size) as usize + 1;
+   
+   while get_num_ranges(max_value, range_size) > 10 {
+      range_size *= 2;
+   }
+   let num_ranges = get_num_ranges(max_value, range_size);
 
    let mut counts = vec![0; num_ranges];
    for &value in &latencies {

@@ -38,14 +38,14 @@ pub struct Args {
    #[clap(long)]
    pub data_directory: Option<std::path::PathBuf>,
 
-   /// [Linux Only] attempt to find the source pid and program name for each dns request.
+   /// [linux only] attempt to find the source pid and program name for each dns request.
    /// Requests must be local to the same host as faf-dns-proxy.
    /// Requires root to identify privileged processes.
    /// Adds significant overhead to each request, ballpark +10ms. Recommended for diagnostic use only.
    #[clap(long)]
    pub client_ident: bool,
 
-   /// At regular intervals (shown in non-daemon output), create a chart representing the distribution of DNS query -> response times.
+   /// at regular intervals (shown in non-daemon output), create a chart representing the distribution of DNS query -> response times.
    /// Charts are saved to the data directory.
    #[clap(long)]
    pub charts: bool,
