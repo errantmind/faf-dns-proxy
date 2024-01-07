@@ -21,6 +21,7 @@ An example of the default (non-daemon) output, which gives some immediate insigh
 
 - DNS filtering (e.g. adblock - disabled by default)
 - Client identification - Identify which process are issuing what queries on your computer (linux only, disabled by default)
+- Add 'chart' output to show the distribution of uncached dns query latencies (disabled by default)
 - Full-duplex async design.
 - Minimal parsing of DNS records to lower overhead.
 - 'Shotgun' DNS queries to multiple upstream resolvers by default. The first reply wins.

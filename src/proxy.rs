@@ -87,7 +87,7 @@ pub async fn go(port: u16) {
          assert!(read_bytes <= 512, "Received a datagram with > 512 bytes on the UDP socket");
          let udp_segment = &mut query_buf[2..read_bytes + 2];
 
-         if crate::statics::ARGS.enable_blocklists {
+         if crate::statics::ARGS.blocklists {
             let question = crate::dns::get_question_as_string(udp_segment.as_ptr(), udp_segment.len());
 
             // The blocklists are not accurate because they are derived from the browser regex filters. They exclude most subdomains.
@@ -132,13 +132,11 @@ pub async fn go(port: u16) {
          let id = crate::dns::get_id_network_byte_order(udp_segment.as_ptr(), udp_segment.len());
          let cache_key = crate::dns::get_query_unique_id(udp_segment.as_ptr(), udp_segment.len());
 
-
          // First check the ANSWER cache and respond immediately if we already have an answer to the query
          if let Some(mut cached_response) = DNS_ANSWER_CACHE.get_mut(cache_key) {
             if cached_response.expires_at > crate::util::get_unix_ts_secs() {
                crate::dns::set_id_network_byte_order(id, &mut cached_response.answer);
                let wrote_len_maybe = listener_socket.send_to(&cached_response.answer, &client_addr).await;
-
                drop(cached_response);
 
                if let Ok(wrote_len) = wrote_len_maybe {
@@ -160,12 +158,20 @@ pub async fn go(port: u16) {
                if !crate::statics::ARGS.daemon {
                   cache_hits += 1;
                   if cache_hits >= 16 && crate::util::is_power_of_2(cache_hits) {
-                     let mut elapsed_ms_vec: Vec<u64> = DNS_ANSWER_CACHE.iter().map(|x| x.elapsed_ms as u64).collect();
-                     if elapsed_ms_vec.len() > 25 {
-                        elapsed_ms_vec.sort_unstable();
-                        let median = elapsed_ms_vec[elapsed_ms_vec.len() / 2];
-                        println!("cache hits: {cache_hits}, median uncached query time: {median}ms, lowest: {}ms", elapsed_ms_vec[0]);
-                     }
+                     tokio::task::spawn(async move {
+                        let mut elapsed_ms_vec: Vec<u64> = DNS_ANSWER_CACHE.iter().map(|x| x.elapsed_ms as u64).collect();
+                        if elapsed_ms_vec.len() > 25 {
+                           elapsed_ms_vec.sort_unstable();
+                           let median = elapsed_ms_vec[elapsed_ms_vec.len() / 2];
+                           println!("cache hits: {cache_hits}, median uncached query time: {median}ms, lowest: {}ms", elapsed_ms_vec[0]);
+                           if crate::statics::ARGS.charts {
+                              match crate::chart::generate_chart(elapsed_ms_vec) {
+                                 Ok(_) => (),
+                                 Err(err) => eprintln!("Failed to generate chart with error: {}", err),
+                              }
+                           }
+                        }
+                     });
                   }
                }
 
@@ -174,12 +180,10 @@ pub async fn go(port: u16) {
                drop(cached_response);
                DNS_ANSWER_CACHE.remove(cache_key);
             }
-         }    
-
-         {
-            // We don't have it cached. Add to QUESTION cache
-            DNS_TIMING_CACHE.insert(cache_key.to_vec(), TimingCacheEntry { asked_at: crate::util::get_unix_ts_millis() });
          }
+
+         // We don't have it cached. Add to QUESTION cache
+         DNS_TIMING_CACHE.insert(cache_key.to_vec(), TimingCacheEntry { asked_at: crate::util::get_unix_ts_millis() });
 
          // Save the client state
          let client_addr_ipv4 = match client_addr {
@@ -187,9 +191,8 @@ pub async fn go(port: u16) {
             _ => std::unreachable!(),
          };
          let cache_key = crate::dns::get_query_unique_id(udp_segment.as_ptr(), udp_segment.len());
-         {
-            BUF_ID_ROUTER.insert(crate::util::encode_id_and_hash32_to_u64(id, crate::util::hash32(cache_key)), client_addr_ipv4);
-         }
+
+         BUF_ID_ROUTER.insert(crate::util::encode_id_and_hash32_to_u64(id, crate::util::hash32(cache_key)), client_addr_ipv4);
 
          // Write both bytes at once after converting to Big Endian
          unsafe { *(query_buf.as_mut_ptr() as *mut u16) = (read_bytes as u16).to_be() };
@@ -202,7 +205,7 @@ pub async fn go(port: u16) {
       }
    });
 
-   if crate::statics::ARGS.enable_blocklists {
+   if crate::statics::ARGS.blocklists {
       let blocklist = crate::blocklist::get_blocklists().await;
       *BLOCKLISTS.lock().await = blocklist;
    }

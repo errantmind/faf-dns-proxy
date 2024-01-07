@@ -48,7 +48,7 @@ pub async fn get_blocklists() -> Vec<BlocklistFile> {
       let task = tokio::spawn(async move {
          let mut file_path = crate::statics::ARGS.data_directory.clone().unwrap_or_else(std::env::temp_dir);
          file_path.push("faf-blocklists");
-         create_all_directories(&file_path).unwrap();
+         std::fs::create_dir_all(&file_path).unwrap();
          let parsed_url = reqwest::Url::parse(url).unwrap();
          file_path.push(parsed_url.path_segments().unwrap().last().unwrap());
          file_path.set_extension("bin");
@@ -215,7 +215,3 @@ fn compress_zlib(bytes: &[u8]) -> Vec<u8> {
    compressor.finish().unwrap()
 }
 
-#[inline(always)]
-fn create_all_directories(path: &std::path::PathBuf) -> Option<()> {
-   std::fs::create_dir_all(path).ok()
-}

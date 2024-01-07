@@ -18,6 +18,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 mod args;
 mod blocklist;
+mod chart;
 mod dns;
 mod proxy;
 mod statics;
@@ -59,3 +60,9 @@ fn print_banner() {
 fn print_version() {
    println!("{} v{} | repo: https://github.com/errantmind/faf-dns-proxy\n", statics::PROJECT_NAME, statics::VERSION,);
 }
+
+// Disable stack probing as an optimization.
+// https://metricpanda.com/rival-fortress-update-45-dealing-with-__chkstk-__chkstk_ms-when-cross-compiling-for-windows/
+#[cfg(target_os = "linux")]
+#[no_mangle]
+extern "C" fn __chkstk() {}

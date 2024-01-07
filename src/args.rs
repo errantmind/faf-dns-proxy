@@ -30,13 +30,13 @@ pub struct Args {
    #[clap(short, long, default_value_t = 53)]
    pub port: u16,
 
-   /// enable SNI (Server Name Indication) in TLS connections to upstream DNS servers.
-   #[clap(long)]
-   pub enable_sni: bool,
-
    /// enable domain filtering from pre-defined blocklists.
    #[clap(long)]
-   pub enable_blocklists: bool,
+   pub blocklists: bool,
+
+   /// data directory to store blocklists. Defaults to a system temp directory.
+   #[clap(long)]
+   pub data_directory: Option<std::path::PathBuf>,
 
    /// [Linux Only] attempt to find the source pid and program name for each dns request.
    /// Requests must be local to the same host as faf-dns-proxy.
@@ -45,7 +45,12 @@ pub struct Args {
    #[clap(long)]
    pub client_ident: bool,
 
-   /// data directory to store blocklists. Defaults to the current working directory.
+   /// At regular intervals (shown in non-daemon output), create a chart representing the distribution of DNS query -> response times.
+   /// Charts are saved to the data directory.
    #[clap(long)]
-   pub data_directory: Option<std::path::PathBuf>,
+   pub charts: bool,
+
+   /// enable SNI (Server Name Indication) in TLS connections to upstream DNS servers.
+   #[clap(long)]
+   pub sni: bool,
 }
