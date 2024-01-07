@@ -22,7 +22,7 @@ use clap::Parser;
 #[derive(Parser, Debug, Default)]
 #[clap(author, version, about, long_about = None)]
 pub struct Args {
-   /// daemon mode, no logging output.
+   /// daemon mode. No logging output to stdio, no charts.
    #[clap(short, long)]
    pub daemon: bool,
 
