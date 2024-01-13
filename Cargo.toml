@@ -1,6 +1,6 @@
 [package]
 name = "faf-dns-proxy"
-version = "0.9.0"
+version = "0.9.1"
 authors = ["James Bates <errantmind@protonmail.com>"]
 edition = "2021"
 
@@ -76,6 +76,9 @@ nohash-hasher = "0.2.0"
 
 # charts to visualize distribution of latency
 charming = { version = "0.3.1", default-features = true }
+
+[dev-dependencies]
+fastrand = "2.0.1"
 
 
 [target.'cfg(target_os = "linux")'.dependencies]

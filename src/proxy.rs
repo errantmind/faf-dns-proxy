@@ -165,7 +165,7 @@ pub async fn go(port: u16) {
                            let median = elapsed_ms_vec[elapsed_ms_vec.len() / 2];
                            println!("cache hits: {cache_hits}, median uncached query time: {median}ms, lowest: {}ms", elapsed_ms_vec[0]);
                            if crate::statics::ARGS.charts {
-                              match crate::chart::generate_chart(elapsed_ms_vec) {
+                              match crate::chart::generate_log_chart(elapsed_ms_vec) {
                                  Ok(_) => (),
                                  Err(err) => eprintln!("Failed to generate chart with error: {}", err),
                               }

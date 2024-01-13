@@ -359,7 +359,7 @@ dependencies = [
 
 [[package]]
 name = "faf-dns-proxy"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "anyhow",
  "bincode",
@@ -367,6 +367,7 @@ dependencies = [
  "chrono",
  "clap",
  "dashmap",
+ "fastrand",
  "flate2",
  "hashbrown",
  "kanal",
