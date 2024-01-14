@@ -16,10 +16,6 @@ You should have received a copy of the GNU Affero General Public License
 along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
-
-static mut STATS: once_cell::sync::Lazy<[crate::stats::Stats; crate::statics::DNS_SERVERS.len()]> =
-   once_cell::sync::Lazy::new(crate::stats::init_stats);
-
 struct TimingCacheEntry {
    asked_at: u128,
 }
@@ -30,8 +26,19 @@ struct AnswerCacheEntry {
    expires_at: u64,
 }
 
+#[cfg(not(any(target_arch = "x86", target_arch = "x86_64", target_arch = "arm", target_arch = "aarch64")))]
 lazy_static::lazy_static! {
+   // Stores when questions are asked
+   static ref DNS_TIMING_CACHE: dashmap::DashMap<Vec<u8>, TimingCacheEntry, ahash::RandomState> =
+      dashmap::DashMap::with_capacity_and_hasher(4096, ahash::RandomState::new());
 
+   // Stores when questions are answered, as well as when they expire and how long it took to answer
+   static ref DNS_ANSWER_CACHE: dashmap::DashMap<Vec<u8>, AnswerCacheEntry, ahash::RandomState> =
+      dashmap::DashMap::with_capacity_and_hasher(4096, ahash::RandomState::new());
+}
+
+#[cfg(any(target_arch = "x86", target_arch = "x86_64", target_arch = "arm", target_arch = "aarch64"))]
+lazy_static::lazy_static! {
    // Stores when questions are asked
    static ref DNS_TIMING_CACHE: dashmap::DashMap<Vec<u8>, TimingCacheEntry, gxhash::GxBuildHasher> =
       dashmap::DashMap::with_capacity_and_hasher(4096, gxhash::GxBuildHasher::default());
@@ -39,10 +46,11 @@ lazy_static::lazy_static! {
    // Stores when questions are answered, as well as when they expire and how long it took to answer
    static ref DNS_ANSWER_CACHE: dashmap::DashMap<Vec<u8>, AnswerCacheEntry, gxhash::GxBuildHasher> =
       dashmap::DashMap::with_capacity_and_hasher(4096, gxhash::GxBuildHasher::default());
+}
 
+lazy_static::lazy_static! {
    // Stores lists of blocked domains loaded from blocklists
    static ref BLOCKLISTS: tokio::sync::Mutex<Vec<crate::blocklist::BlocklistFile>> = tokio::sync::Mutex::new(Vec::new());
-
 
    // When we receive a request from a client, we may have the answer cached or we will request it from upstream. However,
    // when we receive a response from an upstream server we need to know which client to send it to. So, to route responses
@@ -55,6 +63,9 @@ lazy_static::lazy_static! {
    static ref BUF_ID_ROUTER: dashmap::DashMap<u64, std::net::SocketAddrV4, nohash_hasher::BuildNoHashHasher<u64>> =
       dashmap::DashMap::default();
 }
+
+static mut STATS: once_cell::sync::Lazy<[crate::stats::Stats; crate::statics::DNS_SERVERS.len()]> =
+   once_cell::sync::Lazy::new(crate::stats::init_stats);
 
 pub async fn go(port: u16) {
    let proxy = tokio::task::spawn(async move {
