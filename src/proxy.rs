@@ -26,7 +26,10 @@ struct AnswerCacheEntry {
    expires_at: u64,
 }
 
-#[cfg(not(any(target_arch = "x86", target_arch = "x86_64", target_arch = "arm", target_arch = "aarch64")))]
+#[cfg(not(any(
+   all(any(target_arch = "arm", target_arch = "aarch64"), target_feature = "aes", target_feature = "neon"),
+   all(any(target_arch = "x86", target_arch = "x86_64"), target_feature = "aes", target_feature = "sse2")
+)))]
 lazy_static::lazy_static! {
    // Stores when questions are asked
    static ref DNS_TIMING_CACHE: dashmap::DashMap<Vec<u8>, TimingCacheEntry, ahash::RandomState> =
@@ -37,7 +40,10 @@ lazy_static::lazy_static! {
       dashmap::DashMap::with_capacity_and_hasher(4096, ahash::RandomState::new());
 }
 
-#[cfg(any(target_arch = "x86", target_arch = "x86_64", target_arch = "arm", target_arch = "aarch64"))]
+#[cfg(any(
+   all(any(target_arch = "arm", target_arch = "aarch64"), target_feature = "aes", target_feature = "neon"),
+   all(any(target_arch = "x86", target_arch = "x86_64"), target_feature = "aes", target_feature = "sse2")
+))]
 lazy_static::lazy_static! {
    // Stores when questions are asked
    static ref DNS_TIMING_CACHE: dashmap::DashMap<Vec<u8>, TimingCacheEntry, gxhash::GxBuildHasher> =
