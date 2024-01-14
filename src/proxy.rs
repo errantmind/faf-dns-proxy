@@ -16,6 +16,7 @@ You should have received a copy of the GNU Affero General Public License
 along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
+
 static mut STATS: once_cell::sync::Lazy<[crate::stats::Stats; crate::statics::DNS_SERVERS.len()]> =
    once_cell::sync::Lazy::new(crate::stats::init_stats);
 
@@ -32,12 +33,12 @@ struct AnswerCacheEntry {
 lazy_static::lazy_static! {
 
    // Stores when questions are asked
-   static ref DNS_TIMING_CACHE: dashmap::DashMap<Vec<u8>, TimingCacheEntry> =
-      dashmap::DashMap::with_capacity(4096);
+   static ref DNS_TIMING_CACHE: dashmap::DashMap<Vec<u8>, TimingCacheEntry, gxhash::GxBuildHasher> =
+      dashmap::DashMap::with_capacity_and_hasher(4096, gxhash::GxBuildHasher::default());
 
    // Stores when questions are answered, as well as when they expire and how long it took to answer
-   static ref DNS_ANSWER_CACHE: dashmap::DashMap<Vec<u8>, AnswerCacheEntry> =
-      dashmap::DashMap::with_capacity(4096);
+   static ref DNS_ANSWER_CACHE: dashmap::DashMap<Vec<u8>, AnswerCacheEntry, gxhash::GxBuildHasher> =
+      dashmap::DashMap::with_capacity_and_hasher(4096, gxhash::GxBuildHasher::default());
 
    // Stores lists of blocked domains loaded from blocklists
    static ref BLOCKLISTS: tokio::sync::Mutex<Vec<crate::blocklist::BlocklistFile>> = tokio::sync::Mutex::new(Vec::new());
