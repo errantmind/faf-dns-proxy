@@ -41,8 +41,20 @@ pub struct BlocklistFile {
 */
 #[inline]
 pub async fn get_blocklists() -> Vec<BlocklistFile> {
-   let mut blocklist_files: Vec<BlocklistFile> = Vec::with_capacity(crate::statics::BLOCKLISTS.len());
+   let mut blocklist_files: Vec<BlocklistFile> = Vec::with_capacity(crate::statics::BLOCKLISTS.len() + 1);
 
+   {
+      // Add manual blocklist from statics
+      let manual_blocklist = BlocklistFile {
+         file_path: std::path::PathBuf::from("manual_blocklist.bin"),
+         last_modified: 0,
+         blocked_domains: crate::statics::MANUAL_DOMAIN_BLOCKLIST.iter().map(|x| x.to_string()).collect(),
+      };
+
+      blocklist_files.push(manual_blocklist);
+   }
+
+  
    let mut tasks = Vec::with_capacity(crate::statics::BLOCKLISTS.len());
    for url in crate::statics::BLOCKLISTS.iter() {
       let task = tokio::spawn(async move {
@@ -214,4 +226,3 @@ fn compress_zlib(bytes: &[u8]) -> Vec<u8> {
 
    compressor.finish().unwrap()
 }
-

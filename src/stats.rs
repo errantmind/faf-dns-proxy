@@ -21,13 +21,19 @@ use crate::statics::*;
 pub struct Stats {
    pub dns_ip: String,
    pub fastest_count: usize,
+   pub refused_count: usize,
 }
 
 impl Stats {
    #[inline]
-   pub fn array_increment_fastest(stat_array: &mut [Self], dns_server_index: usize) -> usize {
+   pub fn array_increment_fastest(stat_array: &mut [Self], dns_server_index: usize) -> (usize, usize) {
       stat_array[dns_server_index].fastest_count += 1;
-      stat_array[dns_server_index].fastest_count
+      (stat_array[dns_server_index].fastest_count, stat_array[dns_server_index].refused_count)
+   }
+
+   pub fn array_increment_refused(stat_array: &mut [Self], dns_server_index: usize) -> (usize, usize) {
+      stat_array[dns_server_index].refused_count += 1;
+      (stat_array[dns_server_index].fastest_count, stat_array[dns_server_index].refused_count)
    }
 }
 
@@ -44,7 +50,7 @@ pub fn init_stats() -> [Stats; DNS_SERVERS.len()] {
    let mut index = 0;
 
    while index < DNS_SERVERS.len() {
-      arr[index] = Stats { dns_ip: DNS_SERVERS[index].socket_addr.ip().to_string(), fastest_count: 0 };
+      arr[index] = Stats { dns_ip: DNS_SERVERS[index].socket_addr.ip().to_string(), fastest_count: 0, refused_count: 0 };
       index += 1;
    }
 

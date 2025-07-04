@@ -83,7 +83,6 @@ pub fn map_qclass_to_str(qclass: u16) -> &'static str {
    }
 }
 
-
 /// Walks one question in the query (QNAME, QTYPE, QCLASS) and returns these bytes a slice of the buffer
 #[inline]
 pub fn get_query_unique_id<'a>(dns_buf_start: *const u8, len: usize) -> &'a [u8] {
@@ -230,7 +229,11 @@ pub fn get_question_as_string_and_lowest_ttl(dns_buf_start: *const u8, len: usiz
 }
 
 #[inline]
-pub fn mutate_question_into_bogus_response(dns_buf: &mut [u8]) {
+pub fn mutate_question_into_bogus_response(dns_buf: &mut [u8]) -> Option<()> {
+   if dns_buf.len() < 4 {
+      return None;
+   }
+
    // Set the QR bit to 1 (response)
    dns_buf[2] |= 0b1000_0000;
 
@@ -239,4 +242,16 @@ pub fn mutate_question_into_bogus_response(dns_buf: &mut [u8]) {
 
    // Set the RCODE to 3 (NXDOMAIN)
    dns_buf[3] |= 0b0000_0011;
+
+   Some(())
+}
+
+#[inline]
+pub fn check_for_rcode_refused(dns_buf: &[u8]) -> Option<bool> {
+   // Check the RCODE for REFUSED
+   if dns_buf.len() < 4 {
+      return None;
+   }
+
+   Some(dns_buf[3] & 0b0000_1111 == 0b0000_1011)
 }

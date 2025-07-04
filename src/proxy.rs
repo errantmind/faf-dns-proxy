@@ -16,6 +16,8 @@ You should have received a copy of the GNU Affero General Public License
 along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
+use dashmap::mapref::entry;
+
 struct TimingCacheEntry {
    asked_at: u128,
 }
@@ -150,6 +152,13 @@ pub async fn go(port: u16) {
          let id = crate::dns::get_id_network_byte_order(udp_segment.as_ptr(), udp_segment.len());
          let cache_key = crate::dns::get_query_unique_id(udp_segment.as_ptr(), udp_segment.len());
 
+         // if the question / query is already in the question cache but not the answer cache, we delay for 50ms.
+         // TODO: This is a temporary solution to prevent situation I ran into where I have thousands of simultaneous DNS requests to the same domain.
+         if DNS_TIMING_CACHE.get(cache_key).is_some() {
+            eprintln!("Query has not been answered yet. Delaying for 100ms");
+            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+         }
+
          // First check the ANSWER cache and respond immediately if we already have an answer to the query
          if let Some(mut cached_response) = DNS_ANSWER_CACHE.get_mut(cache_key) {
             if cached_response.expires_at > crate::util::get_unix_ts_secs() {
@@ -177,7 +186,10 @@ pub async fn go(port: u16) {
                   cache_hits += 1;
                   if cache_hits >= 16 && crate::util::is_power_of_2(cache_hits) {
                      tokio::task::spawn(async move {
-                        let mut elapsed_ms_vec: Vec<u64> = DNS_ANSWER_CACHE.iter().map(|x| x.elapsed_ms as u64).collect();
+                        // Filter out values greater than 8192ms as they are likely bogus, possibly caused by a drop in internet
+                        // connectivity mid-query, or packet loss.
+                        let mut elapsed_ms_vec: Vec<u64> =
+                           DNS_ANSWER_CACHE.iter().filter(|x| x.elapsed_ms <= 8192).map(|x| x.elapsed_ms as u64).collect();
                         if elapsed_ms_vec.len() > 25 {
                            elapsed_ms_vec.sort_unstable();
                            let median = elapsed_ms_vec[elapsed_ms_vec.len() / 2];
@@ -344,7 +356,7 @@ async fn handle_reads(
    listener_addr: std::sync::Arc<tokio::net::UdpSocket>,
    mut shutdown_reader_rx: tokio::sync::oneshot::Receiver<bool>,
 ) {
-   let mut response_buf = vec![0; 2 << 15];
+   let mut response_buf = vec![0; 2 << 17];
 
    loop {
       let tls_bytes_read;
@@ -386,89 +398,114 @@ async fn handle_reads(
 
          let udp_segment_no_tcp_prefix = &response_buf[offset + 2..offset + udp_segment_len + 2];
 
+         let is_refused_maybe = crate::dns::check_for_rcode_refused(udp_segment_no_tcp_prefix);
+
+         if is_refused_maybe.is_some() && is_refused_maybe.unwrap() || is_refused_maybe.is_none() {
+            // The upstream DNS server refused to answer the question. This isn't particularly useful to us so we skip these answers.
+            // I added a check for REFUSED because, on one occasion, one of the upstream DNS servers would only return REFUSED to any query.
+            eprintln!(
+               "Upstream DNS server {} refused to answer the question or the question was malformed",
+               crate::statics::DNS_SERVERS[upstream_dns_index].socket_addr
+            );
+            unsafe { crate::stats::Stats::array_increment_refused(STATS.as_mut(), upstream_dns_index) };
+            offset += udp_segment_len + 2;
+
+            if offset == tls_bytes_read {
+               break;
+            } else {
+               continue;
+            }
+         }
+
          // Scope for guards
          {
-            {
-               let id = crate::dns::get_id_network_byte_order(udp_segment_no_tcp_prefix.as_ptr(), udp_segment_no_tcp_prefix.len());
-               let cache_key = crate::dns::get_query_unique_id(udp_segment_no_tcp_prefix.as_ptr(), udp_segment_no_tcp_prefix.len());
-               if !DNS_ANSWER_CACHE.contains_key(cache_key) {
-                  // copy the address for now to minimize chances of a collision
-                  let saved_addr =
-                     BUF_ID_ROUTER.get(&crate::util::encode_id_and_hash32_to_u64(id, crate::util::hash32(cache_key))).unwrap();
+            let id = crate::dns::get_id_network_byte_order(udp_segment_no_tcp_prefix.as_ptr(), udp_segment_no_tcp_prefix.len());
+            let cache_key = crate::dns::get_query_unique_id(udp_segment_no_tcp_prefix.as_ptr(), udp_segment_no_tcp_prefix.len());
+            if !DNS_ANSWER_CACHE.contains_key(cache_key) {
+               // copy the address for now to minimize chances of a collision
+               let saved_addr = BUF_ID_ROUTER.get(&crate::util::encode_id_and_hash32_to_u64(id, crate::util::hash32(cache_key))).unwrap();
 
-                  #[cfg(target_os = "linux")]
-                  let stat_maybe: Option<procfs::process::Stat> = if crate::statics::ARGS.client_ident {
-                     // We have to check here because the clients often close their socket immediately after the write.
-                     let socket_info_maybe = crate::inspect_client::get_socket_info(&saved_addr);
-                     if let Some(socket_info) = socket_info_maybe {
-                        crate::inspect_client::find_pid_by_socket_inode(socket_info.header.inode as u64)
-                     } else {
-                        None
-                     }
+               #[cfg(target_os = "linux")]
+               let stat_maybe: Option<procfs::process::Stat> = if crate::statics::ARGS.client_ident {
+                  // We have to check here because the clients often close their socket immediately after the write.
+                  let socket_info_maybe = crate::inspect_client::get_socket_info(&saved_addr);
+                  if let Some(socket_info) = socket_info_maybe {
+                     crate::inspect_client::find_pid_by_socket_inode(socket_info.header.inode as u64)
                   } else {
                      None
-                  };
-
-                  let wrote_len_maybe = listener_addr.send_to(udp_segment_no_tcp_prefix, *saved_addr).await;
-
-                  if let Ok(wrote_len) = wrote_len_maybe {
-                     // Due to how rust implements IO for send_to, we will never have a len_written less than 0
-                     if wrote_len == 0 {
-                        eprintln!("Failed to write response to the client. 0 bytes written at {}:{}", file!(), line!());
-                     }
-                  } else {
-                     eprintln!(
-                        "Failed to write cached response to the client with error: {} at {}:{}",
-                        wrote_len_maybe.unwrap_err(),
-                        file!(),
-                        line!()
-                     );
                   }
+               } else {
+                  None
+               };
 
-                  let elapsed_ms = { crate::util::get_unix_ts_millis() - DNS_TIMING_CACHE.get(cache_key).unwrap().asked_at };
+               let wrote_len_maybe = listener_addr.send_to(udp_segment_no_tcp_prefix, *saved_addr).await;
 
-                  let (site_name, qtype_str, qclass_str, mut ttl) =
-                     crate::dns::get_question_as_string_and_lowest_ttl(udp_segment_no_tcp_prefix.as_ptr(), udp_segment_no_tcp_prefix.len());
-
-                  if ttl < crate::statics::MINIMUM_TTL_OVERRIDE {
-                     ttl = crate::statics::MINIMUM_TTL_OVERRIDE;
+               if let Ok(wrote_len) = wrote_len_maybe {
+                  // Due to how rust implements IO for send_to, we will never have a len_written less than 0
+                  if wrote_len == 0 {
+                     eprintln!("Failed to write response to the client. 0 bytes written at {}:{}", file!(), line!());
                   }
-
-                  DNS_ANSWER_CACHE.insert(
-                     cache_key.to_vec(),
-                     AnswerCacheEntry {
-                        answer: udp_segment_no_tcp_prefix.to_vec(),
-                        elapsed_ms,
-                        expires_at: crate::util::get_unix_ts_secs() + ttl,
-                     },
+               } else {
+                  eprintln!(
+                     "Failed to write cached response to the client with error: {} at {}:{}",
+                     wrote_len_maybe.unwrap_err(),
+                     file!(),
+                     line!()
                   );
+               }
 
-                  unsafe {
-                     if !crate::statics::ARGS.daemon {
-                        let fastest_count = crate::stats::Stats::array_increment_fastest(STATS.as_mut(), upstream_dns_index);
-                        let mut output = format!(
-                           "{:>4}ms -> {:<46} {:>7} {:>3} {:>15} {:>7}",
-                           elapsed_ms,
-                           site_name,
-                           qtype_str,
-                           qclass_str,
-                           format!("{}", crate::statics::DNS_SERVERS[upstream_dns_index].socket_addr.ip()).as_str(),
-                           format!("[{}]", fastest_count),
+               let entry_maybe = DNS_TIMING_CACHE.get(cache_key);
+               let elapsed_ms = match entry_maybe {
+                  Some(entry) => crate::util::get_unix_ts_millis() - entry.asked_at ,
+                  None => 0
+               };
+               
+
+               let (site_name, qtype_str, qclass_str, mut ttl) =
+                  crate::dns::get_question_as_string_and_lowest_ttl(udp_segment_no_tcp_prefix.as_ptr(), udp_segment_no_tcp_prefix.len());
+
+               if ttl < crate::statics::MINIMUM_TTL_OVERRIDE {
+                  ttl = crate::statics::MINIMUM_TTL_OVERRIDE;
+               }
+
+               DNS_ANSWER_CACHE.insert(
+                  cache_key.to_vec(),
+                  AnswerCacheEntry {
+                     answer: udp_segment_no_tcp_prefix.to_vec(),
+                     elapsed_ms,
+                     expires_at: crate::util::get_unix_ts_secs() + ttl,
+                  },
+               );
+
+               // remove entry from timing cache
+               DNS_TIMING_CACHE.remove(cache_key);
+
+               unsafe {
+                  if !crate::statics::ARGS.daemon {
+                     let (fastest_count, refused_count) = crate::stats::Stats::array_increment_fastest(STATS.as_mut(), upstream_dns_index);
+                     let mut output = format!(
+                        "{:>4}ms -> {:<50} {:>7} {:>3} {:>15} {:>7} {:>7}",
+                        elapsed_ms,
+                        site_name,
+                        qtype_str,
+                        qclass_str,
+                        format!("{}", crate::statics::DNS_SERVERS[upstream_dns_index].socket_addr.ip()).as_str(),
+                        format!("[{}]", fastest_count),
+                        format!("[{}]", refused_count),
+                     );
+
+                     #[cfg(target_os = "linux")]
+                     if crate::statics::ARGS.client_ident {
+                        output = format!(
+                           "{} - {} ({}:{})",
+                           output,
+                           stat_maybe.map_or("UNKNOWN".to_string(), |x| format!("{}/{}", x.pid, x.comm)),
+                           saved_addr.ip(),
+                           saved_addr.port(),
                         );
-
-                        #[cfg(target_os = "linux")]
-                        if crate::statics::ARGS.client_ident {
-                           output = format!(
-                              "{} - {} ({}:{})",
-                              output,
-                              stat_maybe.map_or("UNKNOWN".to_string(), |x| format!("{}/{}", x.pid, x.comm)),
-                              saved_addr.ip(),
-                              saved_addr.port(),
-                           );
-                        }
-
-                        println!("{}", output);
                      }
+
+                     println!("{}", output);
                   }
                }
             }
