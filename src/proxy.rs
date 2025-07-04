@@ -57,14 +57,7 @@ pub async fn go(port: u16) {
          let udp_segment = &mut query_buf[2..read_bytes + 2];
 
          if crate::statics::ARGS.blocklists {
-            let question = crate::dns::get_question_as_string(udp_segment.as_ptr(), udp_segment.len());
-
-            // The blocklists are not accurate because they are derived from the browser regex filters. They exclude most subdomains.
-            let mut primary_domain = String::new();
-            let parts: Vec<&str> = question.rsplitn(3, '.').collect();
-            if parts.len() > 2 {
-               primary_domain = format!("{}.{}", parts[1], parts[0]);
-            }
+            let (question, primary_domain) = crate::dns::get_domain_for_filtering(udp_segment);
 
             let mut domain_is_blocked = false;
             for blocklist_file in BLOCKLISTS.lock().await.iter() {

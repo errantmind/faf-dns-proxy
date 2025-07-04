@@ -18,6 +18,96 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 // DNS packet structure reference: https://mislove.org/teaching/cs4700/spring11/handouts/project1-primer.pdf
 
+// DNS Response Processing Pipeline
+
+/// Represents the result of processing a DNS response
+pub struct DnsResponseResult {
+   pub site_name: String,
+   pub qtype_str: &'static str,
+   pub qclass_str: &'static str,
+   pub ttl: u64,
+   pub elapsed_ms: u128,
+   pub cache_key: Vec<u8>,
+}
+
+/// Processes a DNS response and extracts all necessary information for caching and logging
+pub fn process_dns_response(
+   udp_segment: &[u8],
+   asked_at_opt: Option<u128>,
+) -> DnsResponseResult {
+   let cache_key = get_query_unique_id(udp_segment.as_ptr(), udp_segment.len());
+   let elapsed_ms = match asked_at_opt {
+      Some(asked_at) => crate::util::get_unix_ts_millis() - asked_at,
+      None => 0,
+   };
+
+   let (site_name, qtype_str, qclass_str, mut ttl) =
+      get_question_as_string_and_lowest_ttl(udp_segment.as_ptr(), udp_segment.len());
+
+   // Apply minimum TTL override
+   if ttl < crate::statics::MINIMUM_TTL_OVERRIDE {
+      ttl = crate::statics::MINIMUM_TTL_OVERRIDE;
+   }
+
+   DnsResponseResult {
+      site_name,
+      qtype_str,
+      qclass_str,
+      ttl,
+      elapsed_ms,
+      cache_key: cache_key.to_vec(),
+   }
+}
+
+/// Represents the result of domain filtering
+pub struct DomainFilterResult {
+   pub is_blocked: bool,
+   pub primary_domain: String,
+}
+
+/// Processes a DNS query for domain filtering
+pub fn process_domain_filtering(udp_segment: &[u8]) -> DomainFilterResult {
+   let question = get_question_as_string(udp_segment.as_ptr(), udp_segment.len());
+
+   // The blocklists are not accurate because they are derived from the browser regex filters. They exclude most subdomains.
+   let mut primary_domain = String::new();
+   let parts: Vec<&str> = question.rsplitn(3, '.').collect();
+   if parts.len() > 2 {
+      primary_domain = format!("{}.{}", parts[1], parts[0]);
+   }
+
+   DomainFilterResult {
+      is_blocked: false, // Actual filtering logic will be applied by the caller
+      primary_domain,
+   }
+}
+
+/// Gets the domain name from a DNS query for filtering purposes
+pub fn get_domain_for_filtering(udp_segment: &[u8]) -> (String, String) {
+   let question = get_question_as_string(udp_segment.as_ptr(), udp_segment.len());
+
+   // Extract primary domain for blocklist matching
+   let mut primary_domain = String::new();
+   let parts: Vec<&str> = question.rsplitn(3, '.').collect();
+   if parts.len() > 2 {
+      primary_domain = format!("{}.{}", parts[1], parts[0]);
+   }
+
+   (question, primary_domain)
+}
+
+/// Creates a cache entry from a processed DNS response
+pub fn create_cache_entry_from_response(
+   response_result: &DnsResponseResult,
+   udp_segment: &[u8],
+) -> crate::cache::AnswerCacheEntry {
+   crate::cache::AnswerCacheEntry {
+      answer: udp_segment.to_vec(),
+      elapsed_ms: response_result.elapsed_ms,
+      expires_at: crate::util::get_unix_ts_secs() + response_result.ttl,
+   }
+}
+
 #[inline]
 pub fn get_id_network_byte_order(dns_buf_start: *const u8, len: usize) -> u16 {
    debug_assert!(len >= 2);

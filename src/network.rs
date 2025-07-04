@@ -249,26 +249,11 @@ async fn handle_reads(
                   );
                }
 
-               let elapsed_ms = match crate::cache::timing_cache_get_asked_at(cache_key) {
-                  Some(asked_at) => crate::util::get_unix_ts_millis() - asked_at,
-                  None => 0,
-               };
-
-               let (site_name, qtype_str, qclass_str, mut ttl) =
-                  crate::dns::get_question_as_string_and_lowest_ttl(udp_segment_no_tcp_prefix.as_ptr(), udp_segment_no_tcp_prefix.len());
-
-               if ttl < crate::statics::MINIMUM_TTL_OVERRIDE {
-                  ttl = crate::statics::MINIMUM_TTL_OVERRIDE;
-               }
-
-               crate::cache::answer_cache_insert(
-                  cache_key.to_vec(),
-                  crate::cache::AnswerCacheEntry {
-                     answer: udp_segment_no_tcp_prefix.to_vec(),
-                     elapsed_ms,
-                     expires_at: crate::util::get_unix_ts_secs() + ttl,
-                  },
-               );
+               let asked_at = crate::cache::timing_cache_get_asked_at(cache_key);
+               let dns_response = crate::dns::process_dns_response(udp_segment_no_tcp_prefix, asked_at);
+               
+               let cache_entry = crate::dns::create_cache_entry_from_response(&dns_response, udp_segment_no_tcp_prefix);
+               crate::cache::answer_cache_insert(dns_response.cache_key, cache_entry);
 
                // remove entry from timing cache
                crate::cache::timing_cache_remove(cache_key);
@@ -278,10 +263,10 @@ async fn handle_reads(
                      let (fastest_count, refused_count) = crate::stats::Stats::array_increment_fastest(crate::proxy::STATS.as_mut(), upstream_dns_index);
                      let mut output = format!(
                         "{:>4}ms -> {:<50} {:>7} {:>3} {:>15} {:>7} {:>7}",
-                        elapsed_ms,
-                        site_name,
-                        qtype_str,
-                        qclass_str,
+                        dns_response.elapsed_ms,
+                        dns_response.site_name,
+                        dns_response.qtype_str,
+                        dns_response.qclass_str,
                         format!("{}", crate::statics::DNS_SERVERS[upstream_dns_index].socket_addr.ip()).as_str(),
                         format!("[{}]", fastest_count),
                         format!("[{}]", refused_count),
