@@ -222,7 +222,8 @@ async fn handle_reads(
             let id = crate::dns::get_id_network_byte_order(udp_segment_no_tcp_prefix.as_ptr(), udp_segment_no_tcp_prefix.len());
             let cache_key = crate::dns::get_query_unique_id(udp_segment_no_tcp_prefix.as_ptr(), udp_segment_no_tcp_prefix.len());
             
-            if !crate::cache::answer_cache_contains_key(cache_key) {
+            // Atomically remove timing cache entry to ensure only first response is processed
+            if let Some((_, timing_entry)) = crate::cache::timing_cache_remove(cache_key) {
                // copy the address for now to minimize chances of a collision
                let saved_addr = router_get(crate::util::encode_id_and_hash32_to_u64(id, crate::util::hash32(cache_key))).unwrap();
 
@@ -255,15 +256,11 @@ async fn handle_reads(
                   );
                }
 
-               let asked_at = crate::cache::timing_cache_get_asked_at(cache_key);
-               let mut dns_response = crate::dns::process_dns_response(udp_segment_no_tcp_prefix, asked_at);
+               let mut dns_response = crate::dns::process_dns_response(udp_segment_no_tcp_prefix, Some(timing_entry.asked_at));
                dns_response.cache_key = cache_key.to_vec(); // Use the original cache key consistently
                
                let cache_entry = crate::dns::create_cache_entry_from_response(&dns_response, udp_segment_no_tcp_prefix);
                crate::cache::answer_cache_insert(cache_key.to_vec(), cache_entry);
-
-               // Remove timing cache entry after using it
-               crate::cache::timing_cache_remove(cache_key);
 
                unsafe {
                   if !crate::statics::ARGS.daemon {
@@ -293,9 +290,6 @@ async fn handle_reads(
                      println!("{}", output);
                   }
                }
-            } else {
-               // Answer cache already has this key, but we should still clean up timing cache
-               crate::cache::timing_cache_remove(cache_key);
             }
          }
 
