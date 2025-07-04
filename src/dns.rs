@@ -35,7 +35,6 @@ pub fn process_dns_response(
    udp_segment: &[u8],
    asked_at_opt: Option<u128>,
 ) -> DnsResponseResult {
-   let cache_key = get_query_unique_id(udp_segment.as_ptr(), udp_segment.len());
    let elapsed_ms = match asked_at_opt {
       Some(asked_at) => crate::util::get_unix_ts_millis() - asked_at,
       None => 0,
@@ -55,7 +54,7 @@ pub fn process_dns_response(
       qclass_str,
       ttl,
       elapsed_ms,
-      cache_key: cache_key.to_vec(),
+      cache_key: Vec::new(), // Will be set by caller with the original cache key
    }
 }
 

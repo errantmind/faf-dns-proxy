@@ -59,5 +59,5 @@ pub const BLOCKLISTS: [&str; 3] = [
 pub const MANUAL_DOMAIN_BLOCKLIST: [&str; 0] = [];
 
 /// Overrides TTL on DNS records to the value specified, if DNS record has a value lower than the value specified.
-/// To disable, set the value below to 0.
+/// To disable, set to 0.
 pub const MINIMUM_TTL_OVERRIDE: u64 = 300;

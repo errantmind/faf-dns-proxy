@@ -77,7 +77,11 @@ pub fn timing_cache_remove(cache_key: &[u8]) -> Option<(Vec<u8>, TimingCacheEntr
 
 // Answer cache interface functions
 pub fn answer_cache_contains_key(cache_key: &[u8]) -> bool {
-   DNS_ANSWER_CACHE.contains_key(cache_key)
+   if let Some(cached_response) = DNS_ANSWER_CACHE.get(cache_key) {
+      cached_response.expires_at > crate::util::get_unix_ts_secs()
+   } else {
+      false
+   }
 }
 
 pub struct AnswerCacheRef {
