@@ -16,46 +16,6 @@ You should have received a copy of the GNU Affero General Public License
 along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
-use dashmap::mapref::entry;
-
-struct TimingCacheEntry {
-   asked_at: u128,
-}
-
-struct AnswerCacheEntry {
-   answer: Vec<u8>,
-   elapsed_ms: u128,
-   expires_at: u64,
-}
-
-#[cfg(not(any(
-   all(any(target_arch = "arm", target_arch = "aarch64"), target_feature = "aes", target_feature = "neon"),
-   all(any(target_arch = "x86", target_arch = "x86_64"), target_feature = "aes", target_feature = "sse2")
-)))]
-lazy_static::lazy_static! {
-   // Stores when questions are asked
-   static ref DNS_TIMING_CACHE: dashmap::DashMap<Vec<u8>, TimingCacheEntry, ahash::RandomState> =
-      dashmap::DashMap::with_capacity_and_hasher(4096, ahash::RandomState::new());
-
-   // Stores when questions are answered, as well as when they expire and how long it took to answer
-   static ref DNS_ANSWER_CACHE: dashmap::DashMap<Vec<u8>, AnswerCacheEntry, ahash::RandomState> =
-      dashmap::DashMap::with_capacity_and_hasher(4096, ahash::RandomState::new());
-}
-
-#[cfg(any(
-   all(any(target_arch = "arm", target_arch = "aarch64"), target_feature = "aes", target_feature = "neon"),
-   all(any(target_arch = "x86", target_arch = "x86_64"), target_feature = "aes", target_feature = "sse2")
-))]
-lazy_static::lazy_static! {
-   // Stores when questions are asked
-   static ref DNS_TIMING_CACHE: dashmap::DashMap<Vec<u8>, TimingCacheEntry, gxhash::GxBuildHasher> =
-      dashmap::DashMap::with_capacity_and_hasher(4096, gxhash::GxBuildHasher::default());
-
-   // Stores when questions are answered, as well as when they expire and how long it took to answer
-   static ref DNS_ANSWER_CACHE: dashmap::DashMap<Vec<u8>, AnswerCacheEntry, gxhash::GxBuildHasher> =
-      dashmap::DashMap::with_capacity_and_hasher(4096, gxhash::GxBuildHasher::default());
-}
-
 lazy_static::lazy_static! {
    // Stores lists of blocked domains loaded from blocklists
    static ref BLOCKLISTS: tokio::sync::Mutex<Vec<crate::blocklist::BlocklistFile>> = tokio::sync::Mutex::new(Vec::new());
@@ -154,66 +114,63 @@ pub async fn go(port: u16) {
 
          // if the question / query is already in the question cache but not the answer cache, we delay for 50ms.
          // TODO: This is a temporary solution to prevent situation I ran into where I have thousands of simultaneous DNS requests to the same domain.
-         if DNS_TIMING_CACHE.get(cache_key).is_some() {
+         if crate::cache::timing_cache_get(cache_key) {
             eprintln!("Query has not been answered yet. Delaying for 100ms");
             tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
          }
 
          // First check the ANSWER cache and respond immediately if we already have an answer to the query
-         if let Some(mut cached_response) = DNS_ANSWER_CACHE.get_mut(cache_key) {
-            if cached_response.expires_at > crate::util::get_unix_ts_secs() {
-               crate::dns::set_id_network_byte_order(id, &mut cached_response.answer);
-               let wrote_len_maybe = listener_socket.send_to(&cached_response.answer, &client_addr).await;
-               drop(cached_response);
+         if let Some(cached_response) = crate::cache::answer_cache_get_mut_check_expiry(cache_key, crate::util::get_unix_ts_secs()) {
+            let mut answer = cached_response.answer;
+            crate::dns::set_id_network_byte_order(id, &mut answer);
+            let wrote_len_maybe = listener_socket.send_to(&answer, &client_addr).await;
 
-               if let Ok(wrote_len) = wrote_len_maybe {
-                  // Due to how rust implements IO for send_to, we will never have a len_written less than 0
-                  if wrote_len == 0 {
-                     eprintln!("Failed to write response to the client. 0 bytes written at {}:{}", file!(), line!());
-                     continue;
-                  }
-               } else {
-                  eprintln!(
-                     "Failed to write cached response to the client with error: {} at {}:{}",
-                     wrote_len_maybe.unwrap_err(),
-                     file!(),
-                     line!()
-                  );
+            if let Ok(wrote_len) = wrote_len_maybe {
+               // Due to how rust implements IO for send_to, we will never have a len_written less than 0
+               if wrote_len == 0 {
+                  eprintln!("Failed to write response to the client. 0 bytes written at {}:{}", file!(), line!());
                   continue;
                }
+            } else {
+               eprintln!(
+                  "Failed to write cached response to the client with error: {} at {}:{}",
+                  wrote_len_maybe.unwrap_err(),
+                  file!(),
+                  line!()
+               );
+               continue;
+            }
 
-               if !crate::statics::ARGS.daemon {
-                  cache_hits += 1;
-                  if cache_hits >= 16 && crate::util::is_power_of_2(cache_hits) {
-                     tokio::task::spawn(async move {
-                        // Filter out values greater than 8192ms as they are likely bogus, possibly caused by a drop in internet
-                        // connectivity mid-query, or packet loss.
-                        let mut elapsed_ms_vec: Vec<u64> =
-                           DNS_ANSWER_CACHE.iter().filter(|x| x.elapsed_ms <= 8192).map(|x| x.elapsed_ms as u64).collect();
-                        if elapsed_ms_vec.len() > 25 {
-                           elapsed_ms_vec.sort_unstable();
-                           let median = elapsed_ms_vec[elapsed_ms_vec.len() / 2];
-                           println!("cache hits: {cache_hits}, median uncached query time: {median}ms, lowest: {}ms", elapsed_ms_vec[0]);
-                           if crate::statics::ARGS.charts {
-                              match crate::chart::generate_log_chart(elapsed_ms_vec) {
-                                 Ok(_) => (),
-                                 Err(err) => eprintln!("Failed to generate chart with error: {}", err),
-                              }
+            if !crate::statics::ARGS.daemon {
+               cache_hits += 1;
+               if cache_hits >= 16 && crate::util::is_power_of_2(cache_hits) {
+                  tokio::task::spawn(async move {
+                     // Filter out values greater than 8192ms as they are likely bogus, possibly caused by a drop in internet
+                     // connectivity mid-query, or packet loss.
+                     let mut elapsed_ms_vec: Vec<u64> = crate::cache::answer_cache_iter_filtered();
+                     if elapsed_ms_vec.len() > 25 {
+                        elapsed_ms_vec.sort_unstable();
+                        let median = elapsed_ms_vec[elapsed_ms_vec.len() / 2];
+                        println!("cache hits: {cache_hits}, median uncached query time: {median}ms, lowest: {}ms", elapsed_ms_vec[0]);
+                        if crate::statics::ARGS.charts {
+                           match crate::chart::generate_log_chart(elapsed_ms_vec) {
+                              Ok(_) => (),
+                              Err(err) => eprintln!("Failed to generate chart with error: {}", err),
                            }
                         }
-                     });
-                  }
+                     }
+                  });
                }
-
-               continue;
-            } else {
-               drop(cached_response);
-               DNS_ANSWER_CACHE.remove(cache_key);
             }
+
+            continue;
          }
 
          // We don't have it cached. Add to QUESTION cache
-         DNS_TIMING_CACHE.insert(cache_key.to_vec(), TimingCacheEntry { asked_at: crate::util::get_unix_ts_millis() });
+         crate::cache::timing_cache_insert(
+            cache_key.to_vec(),
+            crate::cache::TimingCacheEntry { asked_at: crate::util::get_unix_ts_millis() },
+         );
 
          // Save the client state
          let client_addr_ipv4 = match client_addr {
@@ -421,7 +378,7 @@ async fn handle_reads(
          {
             let id = crate::dns::get_id_network_byte_order(udp_segment_no_tcp_prefix.as_ptr(), udp_segment_no_tcp_prefix.len());
             let cache_key = crate::dns::get_query_unique_id(udp_segment_no_tcp_prefix.as_ptr(), udp_segment_no_tcp_prefix.len());
-            if !DNS_ANSWER_CACHE.contains_key(cache_key) {
+            if !crate::cache::answer_cache_contains_key(cache_key) {
                // copy the address for now to minimize chances of a collision
                let saved_addr = BUF_ID_ROUTER.get(&crate::util::encode_id_and_hash32_to_u64(id, crate::util::hash32(cache_key))).unwrap();
 
@@ -454,12 +411,10 @@ async fn handle_reads(
                   );
                }
 
-               let entry_maybe = DNS_TIMING_CACHE.get(cache_key);
-               let elapsed_ms = match entry_maybe {
-                  Some(entry) => crate::util::get_unix_ts_millis() - entry.asked_at ,
-                  None => 0
+               let elapsed_ms = match crate::cache::timing_cache_get_asked_at(cache_key) {
+                  Some(asked_at) => crate::util::get_unix_ts_millis() - asked_at,
+                  None => 0,
                };
-               
 
                let (site_name, qtype_str, qclass_str, mut ttl) =
                   crate::dns::get_question_as_string_and_lowest_ttl(udp_segment_no_tcp_prefix.as_ptr(), udp_segment_no_tcp_prefix.len());
@@ -468,9 +423,9 @@ async fn handle_reads(
                   ttl = crate::statics::MINIMUM_TTL_OVERRIDE;
                }
 
-               DNS_ANSWER_CACHE.insert(
+               crate::cache::answer_cache_insert(
                   cache_key.to_vec(),
-                  AnswerCacheEntry {
+                  crate::cache::AnswerCacheEntry {
                      answer: udp_segment_no_tcp_prefix.to_vec(),
                      elapsed_ms,
                      expires_at: crate::util::get_unix_ts_secs() + ttl,
@@ -478,7 +433,7 @@ async fn handle_reads(
                );
 
                // remove entry from timing cache
-               DNS_TIMING_CACHE.remove(cache_key);
+               crate::cache::timing_cache_remove(cache_key);
 
                unsafe {
                   if !crate::statics::ARGS.daemon {
