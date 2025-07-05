@@ -58,42 +58,7 @@ pub fn process_dns_response(
    }
 }
 
-/// Represents the result of domain filtering
-pub struct DomainFilterResult {
-   pub is_blocked: bool,
-   pub primary_domain: String,
-}
 
-/// Processes a DNS query for domain filtering
-pub fn process_domain_filtering(udp_segment: &[u8]) -> DomainFilterResult {
-   let question = get_question_as_string(udp_segment.as_ptr(), udp_segment.len());
-
-   // The blocklists are not accurate because they are derived from the browser regex filters. They exclude most subdomains.
-   let mut primary_domain = String::new();
-   let parts: Vec<&str> = question.rsplitn(3, '.').collect();
-   if parts.len() > 2 {
-      primary_domain = format!("{}.{}", parts[1], parts[0]);
-   }
-
-   DomainFilterResult {
-      is_blocked: false, // Actual filtering logic will be applied by the caller
-      primary_domain,
-   }
-}
-
-/// Gets the domain name from a DNS query for filtering purposes
-pub fn get_domain_for_filtering(udp_segment: &[u8]) -> (String, String) {
-   let question = get_question_as_string(udp_segment.as_ptr(), udp_segment.len());
-
-   // Extract primary domain for blocklist matching
-   let mut primary_domain = String::new();
-   let parts: Vec<&str> = question.rsplitn(3, '.').collect();
-   if parts.len() > 2 {
-      primary_domain = format!("{}.{}", parts[1], parts[0]);
-   }
-
-   (question, primary_domain)
-}
 
 /// Creates a cache entry from a processed DNS response
 pub fn create_cache_entry_from_response(
@@ -317,23 +282,6 @@ pub fn get_question_as_string_and_lowest_ttl(dns_buf_start: *const u8, len: usiz
    }
 }
 
-#[inline]
-pub fn mutate_question_into_bogus_response(dns_buf: &mut [u8]) -> Option<()> {
-   if dns_buf.len() < 4 {
-      return None;
-   }
-
-   // Set the QR bit to 1 (response)
-   dns_buf[2] |= 0b1000_0000;
-
-   // Set the RA bit to 1 (recursion available)
-   dns_buf[3] |= 0b1000_0000;
-
-   // Set the RCODE to 3 (NXDOMAIN)
-   dns_buf[3] |= 0b0000_0011;
-
-   Some(())
-}
 
 #[inline]
 pub fn check_for_rcode_refused(dns_buf: &[u8]) -> Option<bool> {

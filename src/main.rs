@@ -21,6 +21,7 @@ mod blocklist;
 mod cache;
 mod chart;
 mod dns;
+mod filter;
 mod network;
 mod proxy;
 mod statics;

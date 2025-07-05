@@ -1,3 +1,21 @@
+/*
+FaF is a high performance DNS over TLS proxy
+Copyright (C) 2022  James Bates
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License
+along with this program.  If not, see <https://www.gnu.org/licenses/>.
+*/
+
 lazy_static::lazy_static! {
    static ref ALL_PROCESSES: std::sync::Mutex<Vec<procfs::process::Process>> = std::sync::Mutex::new(procfs::process::all_processes().unwrap().filter_map(Result::ok).collect::<Vec<_>>());
 }
@@ -88,7 +106,6 @@ pub fn get_socket_info(source_socket: &std::net::SocketAddrV4) -> Option<Box<net
 
 // ref: https://github.com/eminence/procfs/blob/master/procfs/examples/netstat.rs
 pub fn find_pid_by_socket_inode(inode: u64) -> Option<procfs::process::Stat> {
-
    let mut stats_maybe: Option<procfs::process::Stat> = if let Ok(all_procs) = ALL_PROCESSES.try_lock() {
       // fast path, if we find the stats in the cached list of processes we can avoid the expensive procfs::process::all_processes() call
       find_stats_for_inode(&all_procs, inode)

@@ -16,10 +16,6 @@ You should have received a copy of the GNU Affero General Public License
 along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
-lazy_static::lazy_static! {
-   // Stores lists of blocked domains loaded from blocklists
-   static ref BLOCKLISTS: tokio::sync::Mutex<Vec<crate::blocklist::BlocklistFile>> = tokio::sync::Mutex::new(Vec::new());
-}
 
 pub static mut STATS: once_cell::sync::Lazy<[crate::stats::Stats; crate::statics::DNS_SERVERS.len()]> =
    once_cell::sync::Lazy::new(crate::stats::init_stats);
@@ -56,39 +52,10 @@ pub async fn go(port: u16) {
          assert!(read_bytes <= 512, "Received a datagram with > 512 bytes on the UDP socket");
          let udp_segment = &mut query_buf[2..read_bytes + 2];
 
-         if crate::statics::ARGS.blocklists {
-            let (question, primary_domain) = crate::dns::get_domain_for_filtering(udp_segment);
-
-            let mut domain_is_blocked = false;
-            for blocklist_file in BLOCKLISTS.lock().await.iter() {
-               if blocklist_file.blocked_domains.contains(&question)
-                  || (!primary_domain.is_empty() && blocklist_file.blocked_domains.contains(&primary_domain))
-               {
-                  crate::dns::mutate_question_into_bogus_response(udp_segment);
-                  let wrote_len_maybe = listener_socket.send_to(udp_segment, &client_addr).await;
-
-                  if let Ok(wrote_len) = wrote_len_maybe {
-                     // Due to how rust implements IO for send_to, we will never have a len_written less than 0
-                     if wrote_len == 0 {
-                        eprintln!("Failed to write blocked response to the client. 0 bytes written at {}:{}", file!(), line!());
-                     }
-                  } else {
-                     eprintln!(
-                        "Failed to write cached response to the client with error: {} at {}:{}",
-                        wrote_len_maybe.unwrap_err(),
-                        file!(),
-                        line!()
-                     );
-                  }
-
-                  domain_is_blocked = true;
-                  break;
-               }
-            }
-
-            if domain_is_blocked {
-               continue;
-            }
+         // Process domain filtering
+         let filter_result = crate::filter::process_domain_filtering(udp_segment, &listener_socket, &client_addr).await;
+         if filter_result.is_blocked {
+            continue;
          }
 
          let id = crate::dns::get_id_network_byte_order(udp_segment.as_ptr(), udp_segment.len());
@@ -174,10 +141,8 @@ pub async fn go(port: u16) {
       }
    });
 
-   if crate::statics::ARGS.blocklists {
-      let blocklist = crate::blocklist::get_blocklists().await;
-      *BLOCKLISTS.lock().await = blocklist;
-   }
+   // Initialize domain filtering system
+   crate::filter::initialize_blocklists().await;
 
    proxy.await.unwrap();
 }
