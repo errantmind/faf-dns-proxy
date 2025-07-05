@@ -27,6 +27,11 @@ lazy_static::lazy_static! {
    // no-op hasher) over particular types like u64.
    static ref BUF_ID_ROUTER: dashmap::DashMap<u64, std::net::SocketAddrV4, nohash_hasher::BuildNoHashHasher<u64>> =
       dashmap::DashMap::default();
+      
+   // eBPF-based client identifier for ultra-fast process lookup (Linux only)
+   #[cfg(target_os = "linux")]
+   static ref EBPF_CLIENT_IDENTIFIER: crate::ebpf_client::EbpfClientIdentifier = 
+      crate::ebpf_client::EbpfClientIdentifier::new();
 }
 
 // Router interface functions
@@ -229,13 +234,8 @@ async fn handle_reads(
 
                #[cfg(target_os = "linux")]
                let stat_maybe: Option<procfs::process::Stat> = if crate::statics::ARGS.client_ident {
-                  // We have to check here because the clients often close their socket immediately after the write.
-                  let socket_info_maybe = crate::inspect_client::get_socket_info(&saved_addr);
-                  if let Some(socket_info) = socket_info_maybe {
-                     crate::inspect_client::find_pid_by_socket_inode(socket_info.header.inode as u64)
-                  } else {
-                     None
-                  }
+                  // Use eBPF-based ultra-fast lookup with fallback to netlink/procfs
+                  EBPF_CLIENT_IDENTIFIER.get_client_info(&saved_addr)
                } else {
                   None
                };

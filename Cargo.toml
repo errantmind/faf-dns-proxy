@@ -86,6 +86,8 @@ netlink-packet-core = "0.7.0"
 netlink-packet-sock-diag = "0.4.2"
 netlink-sys = "0.8.5"
 procfs = "0.16.0"
+# eBPF for high-performance client identification
+aya = { version = "0.12", default-features = false }
 # faster alloc
 tcmalloc = { version = "0.3.0", default-features = false, features = ["bundled"] }
 
