@@ -4,6 +4,7 @@ version = "0.9.4"
 authors = ["James Bates <errantmind@protonmail.com>"]
 edition = "2021"
 
+
 [profile.dev]
 opt-level = 1
 debug = true
@@ -46,7 +47,15 @@ dashmap = { version = "5.5.3", default-features = true, features = ["inline"] }
 kanal = "0.1.0-pre8"
 
 # async runtime/executor
-tokio = { version = "1.34.0", features = ["rt-multi-thread", "net", "io-util", "time", "macros", "sync"] }
+tokio = { version = "1.34.0", features = [
+    "rt-multi-thread",
+    "net",
+    "io-util",
+    "time",
+    "macros",
+    "sync",
+    "signal",
+] }
 tokio-rustls = { version = "0.25.0", features = ["default", "early-data"] }
 
 # walk directories, enumerating files
@@ -76,6 +85,10 @@ nohash-hasher = "0.2.0"
 # charts to visualize distribution of latency
 charming = { version = "0.3.1", default-features = true }
 
+[build-dependencies]
+anyhow = "1.0"
+which = "4.2"
+
 [dev-dependencies]
 fastrand = "2.0.1"
 
@@ -86,13 +99,16 @@ netlink-packet-core = "0.7.0"
 netlink-packet-sock-diag = "0.4.2"
 netlink-sys = "0.8.5"
 procfs = "0.16.0"
-# eBPF for high-performance client identification
-aya = { version = "0.12", default-features = false }
 # faster alloc
-tcmalloc = { version = "0.3.0", default-features = false, features = ["bundled"] }
+tcmalloc = { version = "0.3.0", default-features = false, features = [
+    "bundled",
+] }
+# system calls
+libc = "0.2"
 
 [target.'cfg(any(all(any(target_arch = "arm", target_arch = "aarch64"), target_feature = "aes", target_feature = "neon"), all(any(target_arch = "x86", target_arch = "x86_64"), target_feature = "aes", target_feature = "sse2")))'.dependencies]
 gxhash = "3.1.0"
 
 [target.'cfg(not(any(all(any(target_arch = "arm", target_arch = "aarch64"), target_feature = "aes", target_feature = "neon"), all(any(target_arch = "x86", target_arch = "x86_64"), target_feature = "aes", target_feature = "sse2"))))'.dependencies]
 ahash = "0.8.7"
+

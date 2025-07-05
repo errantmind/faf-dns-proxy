@@ -29,12 +29,6 @@ lazy_static::lazy_static! {
       dashmap::DashMap::default();
 }
 
-// eBPF-based client identifier for ultra-fast process lookup (Linux only)
-#[cfg(target_os = "linux")]
-lazy_static::lazy_static! {
-   static ref EBPF_CLIENT_IDENTIFIER: crate::ebpf_client::EbpfClientIdentifier = 
-      crate::ebpf_client::EbpfClientIdentifier::new();
-}
 
 // Router interface functions
 pub fn router_insert(key: u64, value: std::net::SocketAddrV4) {
@@ -44,6 +38,7 @@ pub fn router_insert(key: u64, value: std::net::SocketAddrV4) {
 pub fn router_get(key: u64) -> Option<dashmap::mapref::one::Ref<'static, u64, std::net::SocketAddrV4, nohash_hasher::BuildNoHashHasher<u64>>> {
    BUF_ID_ROUTER.get(&key)
 }
+
 
 pub async fn upstream_tls_handler(
    client_msg_rx: kanal::AsyncReceiver<Vec<u8>>,
@@ -236,8 +231,13 @@ async fn handle_reads(
 
                #[cfg(target_os = "linux")]
                let (stat_maybe, lookup_method) = if crate::statics::ARGS.client_ident {
-                  // Use eBPF-based ultra-fast lookup with fallback to netlink/procfs
-                  EBPF_CLIENT_IDENTIFIER.get_client_info(&saved_addr)
+                  let socket_info = crate::inspect_client::get_socket_info(&saved_addr);
+                  if let Some(socket_info) = socket_info {
+                     let stat = crate::inspect_client::find_pid_by_socket_inode(socket_info.header.inode as u64);
+                     (stat, "NETLINK")
+                  } else {
+                     (None, "NETLINK")
+                  }
                } else {
                   (None, "")
                };

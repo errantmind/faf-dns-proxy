@@ -33,9 +33,6 @@ mod util;
 mod inspect_client;
 
 #[cfg(target_os = "linux")]
-mod ebpf_client;
-
-#[cfg(target_os = "linux")]
 #[global_allocator]
 static GLOBAL: tcmalloc::TCMalloc = tcmalloc::TCMalloc;
 
