@@ -131,34 +131,13 @@ impl EbpfClientIdentifier {
          None => return None,
       };
 
-      // First try exact port match
+      // Try exact port match only
       let port = client_addr.port() as u32;
       if let Ok(process_info) = map.get(&port, 0) {
          if let Ok(process) = procfs::process::Process::new(process_info.pid as i32) {
             if let Ok(stat) = process.stat() {
                return Some(stat);
             }
-         }
-      }
-
-      // If exact port doesn't work, find the most recent process
-      let mut best_match: Option<ProcessInfo> = None;
-      let mut newest_timestamp = 0;
-
-      // Iterate through the map to find the most recent entry by timestamp
-      for result in map.iter() {
-         if let Ok((_, process_info)) = result {
-            // Find the entry with the highest timestamp (most recent)
-            if process_info.timestamp > newest_timestamp {
-               newest_timestamp = process_info.timestamp;
-               best_match = Some(process_info);
-            }
-         }
-      }
-
-      if let Some(process_info) = best_match {
-         if let Ok(process) = procfs::process::Process::new(process_info.pid as i32) {
-            return process.stat().ok();
          }
       }
 

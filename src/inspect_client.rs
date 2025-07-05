@@ -17,7 +17,15 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
 lazy_static::lazy_static! {
-   static ref ALL_PROCESSES: std::sync::Mutex<Vec<procfs::process::Process>> = std::sync::Mutex::new(procfs::process::all_processes().unwrap().filter_map(Result::ok).collect::<Vec<_>>());
+   static ref ALL_PROCESSES: std::sync::Mutex<Vec<procfs::process::Process>> = std::sync::Mutex::new(
+      match procfs::process::all_processes() {
+         Ok(procs) => procs.filter_map(Result::ok).collect::<Vec<_>>(),
+         Err(_) => {
+            eprintln!("Warning: Failed to initialize process list at startup");
+            Vec::new()
+         }
+      }
+   );
 }
 
 // ref: https://man7.org/linux/man-pages/man7/netlink.7.html
@@ -32,9 +40,26 @@ pub fn get_socket_info(source_socket: &std::net::SocketAddrV4) -> Option<Box<net
    };
    use netlink_sys::{protocols::NETLINK_SOCK_DIAG, Socket, SocketAddr};
 
-   let mut nlsocket = Socket::new(NETLINK_SOCK_DIAG).unwrap();
-   let _port_number = nlsocket.bind_auto().unwrap().port_number();
-   nlsocket.connect(&SocketAddr::new(0, 0)).unwrap();
+   let mut nlsocket = match Socket::new(NETLINK_SOCK_DIAG) {
+      Ok(socket) => socket,
+      Err(err) => {
+         eprintln!("Failed to create netlink socket: {} at {}:{}", err, file!(), line!());
+         return None;
+      }
+   };
+   
+   let _port_number = match nlsocket.bind_auto() {
+      Ok(addr) => addr.port_number(),
+      Err(err) => {
+         eprintln!("Failed to bind netlink socket: {} at {}:{}", err, file!(), line!());
+         return None;
+      }
+   };
+   
+   if let Err(err) = nlsocket.connect(&SocketAddr::new(0, 0)) {
+      eprintln!("Failed to connect netlink socket: {} at {}:{}", err, file!(), line!());
+      return None;
+   }
 
    let mut nl_hdr = NetlinkHeader::default();
    nl_hdr.flags = NLM_F_REQUEST | NLM_F_DUMP;
@@ -71,7 +96,13 @@ pub fn get_socket_info(source_socket: &std::net::SocketAddrV4) -> Option<Box<net
    while let Ok(size) = nlsocket.recv(&mut &mut receive_buffer[..], 0) {
       loop {
          let bytes = &receive_buffer[offset..];
-         let rx_packet = <NetlinkMessage<SockDiagMessage>>::deserialize(bytes).unwrap();
+         let rx_packet = match <NetlinkMessage<SockDiagMessage>>::deserialize(bytes) {
+            Ok(packet) => packet,
+            Err(err) => {
+               eprintln!("Failed to deserialize netlink message: {} at {}:{}", err, file!(), line!());
+               break;
+            }
+         };
 
          match rx_packet.payload {
             NetlinkPayload::Noop => {}
@@ -115,7 +146,13 @@ pub fn find_pid_by_socket_inode(inode: u64) -> Option<procfs::process::Stat> {
 
    if stats_maybe.is_none() {
       // slow path
-      let new_procs: Vec<procfs::process::Process> = procfs::process::all_processes().unwrap().filter_map(Result::ok).collect::<Vec<_>>();
+      let new_procs: Vec<procfs::process::Process> = match procfs::process::all_processes() {
+         Ok(procs) => procs.filter_map(Result::ok).collect::<Vec<_>>(),
+         Err(err) => {
+            eprintln!("Failed to enumerate processes: {} at {}:{}", err, file!(), line!());
+            return None;
+         }
+      };
       stats_maybe = find_stats_for_inode(&new_procs, inode);
       if let Ok(mut all_procs) = ALL_PROCESSES.try_lock() {
          *all_procs = new_procs;
@@ -129,9 +166,11 @@ fn find_stats_for_inode(all_procs: &[procfs::process::Process], inode: u64) -> O
    for process in all_procs.iter() {
       if let (Ok(stat), Ok(fds)) = (process.stat(), process.fd()) {
          for fd in fds {
-            if let procfs::process::FDTarget::Socket(fd_inode) = fd.unwrap().target {
-               if fd_inode == inode {
-                  return Some(stat);
+            if let Ok(fd_info) = fd {
+               if let procfs::process::FDTarget::Socket(fd_inode) = fd_info.target {
+                  if fd_inode == inode {
+                     return Some(stat);
+                  }
                }
             }
          }
