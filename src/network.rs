@@ -27,9 +27,11 @@ lazy_static::lazy_static! {
    // no-op hasher) over particular types like u64.
    static ref BUF_ID_ROUTER: dashmap::DashMap<u64, std::net::SocketAddrV4, nohash_hasher::BuildNoHashHasher<u64>> =
       dashmap::DashMap::default();
-      
-   // eBPF-based client identifier for ultra-fast process lookup (Linux only)
-   #[cfg(target_os = "linux")]
+}
+
+// eBPF-based client identifier for ultra-fast process lookup (Linux only)
+#[cfg(target_os = "linux")]
+lazy_static::lazy_static! {
    static ref EBPF_CLIENT_IDENTIFIER: crate::ebpf_client::EbpfClientIdentifier = 
       crate::ebpf_client::EbpfClientIdentifier::new();
 }
@@ -233,11 +235,11 @@ async fn handle_reads(
                let saved_addr = router_get(crate::util::encode_id_and_hash32_to_u64(id, crate::util::hash32(cache_key))).unwrap();
 
                #[cfg(target_os = "linux")]
-               let stat_maybe: Option<procfs::process::Stat> = if crate::statics::ARGS.client_ident {
+               let (stat_maybe, lookup_method) = if crate::statics::ARGS.client_ident {
                   // Use eBPF-based ultra-fast lookup with fallback to netlink/procfs
                   EBPF_CLIENT_IDENTIFIER.get_client_info(&saved_addr)
                } else {
-                  None
+                  (None, "")
                };
 
                let wrote_len_maybe = listener_addr.send_to(udp_segment_no_tcp_prefix, *saved_addr).await;
@@ -279,11 +281,12 @@ async fn handle_reads(
                      #[cfg(target_os = "linux")]
                      if crate::statics::ARGS.client_ident {
                         output = format!(
-                           "{} - {} ({}:{})",
+                           "{} - {} ({}:{}) [{}]",
                            output,
                            stat_maybe.map_or("UNKNOWN".to_string(), |x| format!("{}/{}", x.pid, x.comm)),
                            saved_addr.ip(),
                            saved_addr.port(),
+                           lookup_method,
                         );
                      }
 
