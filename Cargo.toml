@@ -1,6 +1,6 @@
 [package]
 name = "faf-dns-proxy"
-version = "0.9.4"
+version = "1.0.0"
 authors = ["James Bates <errantmind@protonmail.com>"]
 edition = "2021"
 
@@ -46,7 +46,14 @@ dashmap = { version = "5.5.3", default-features = true, features = ["inline"] }
 kanal = "0.1.0-pre8"
 
 # async runtime/executor
-tokio = { version = "1.34.0", features = ["rt-multi-thread", "net", "io-util", "time", "macros", "sync"] }
+tokio = { version = "1.34.0", features = [
+    "rt-multi-thread",
+    "net",
+    "io-util",
+    "time",
+    "macros",
+    "sync",
+] }
 tokio-rustls = { version = "0.25.0", features = ["default", "early-data"] }
 
 # walk directories, enumerating files
@@ -89,7 +96,9 @@ procfs = "0.16.0"
 # eBPF for high-performance client identification
 aya = { version = "0.12", default-features = false }
 # faster alloc
-tcmalloc = { version = "0.3.0", default-features = false, features = ["bundled"] }
+tcmalloc = { version = "0.3.0", default-features = false, features = [
+    "bundled",
+] }
 
 [target.'cfg(any(all(any(target_arch = "arm", target_arch = "aarch64"), target_feature = "aes", target_feature = "neon"), all(any(target_arch = "x86", target_arch = "x86_64"), target_feature = "aes", target_feature = "sse2")))'.dependencies]
 gxhash = "3.1.0"
