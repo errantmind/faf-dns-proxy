@@ -17,42 +17,59 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
 use crate::statics::*;
+use std::sync::atomic::{AtomicU64, Ordering};
 
-pub struct Stats {
-   pub dns_ip: String,
-   pub fastest_count: usize,
-   pub refused_count: usize,
+// Cache-line aligned to prevent false sharing between different server stats
+#[repr(align(64))]
+pub struct ServerStats {
+    pub fastest_count: AtomicU64,
+    pub refused_count: AtomicU64,
 }
 
-impl Stats {
-   #[inline]
-   pub fn array_increment_fastest(stat_array: &mut [Self], dns_server_index: usize) -> (usize, usize) {
-      stat_array[dns_server_index].fastest_count += 1;
-      (stat_array[dns_server_index].fastest_count, stat_array[dns_server_index].refused_count)
-   }
-
-   pub fn array_increment_refused(stat_array: &mut [Self], dns_server_index: usize) -> (usize, usize) {
-      stat_array[dns_server_index].refused_count += 1;
-      (stat_array[dns_server_index].fastest_count, stat_array[dns_server_index].refused_count)
-   }
+impl ServerStats {
+    const fn new() -> Self {
+        Self {
+            fastest_count: AtomicU64::new(0),
+            refused_count: AtomicU64::new(0),
+        }
+    }
 }
 
-impl std::fmt::Display for Stats {
-   fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-      write!(f, "{}\n  fastest: {}\n", self.dns_ip, self.fastest_count)
-   }
-}
+// Global atomic statistics array - safe, thread-safe, zero-overhead
+static SERVER_STATS: [ServerStats; DNS_SERVERS.len()] = {
+    // Create array with const new() to avoid complex initialization
+    [const { ServerStats::new() }; DNS_SERVERS.len()]
+};
 
+/// Increment fastest response counter for a DNS server
+/// Returns (new_fastest_count, current_refused_count)
 #[inline]
-pub fn init_stats() -> [Stats; DNS_SERVERS.len()] {
-   #[allow(invalid_value)]
-   let mut arr: [Stats; DNS_SERVERS.len()] = unsafe { core::mem::MaybeUninit::zeroed().assume_init() };
-   let mut index = 0;
+pub fn increment_fastest(dns_server_index: usize) -> (u64, u64) {
+    let fastest = SERVER_STATS[dns_server_index].fastest_count.fetch_add(1, Ordering::Relaxed);
+    let refused = SERVER_STATS[dns_server_index].refused_count.load(Ordering::Relaxed);
+    (fastest + 1, refused)
+}
 
-   while index < DNS_SERVERS.len() {
-      arr[index] = Stats { dns_ip: DNS_SERVERS[index].socket_addr.ip().to_string(), fastest_count: 0, refused_count: 0 };
-      index += 1;
-   }
+/// Increment refused response counter for a DNS server  
+/// Returns (current_fastest_count, new_refused_count)
+#[inline]
+pub fn increment_refused(dns_server_index: usize) -> (u64, u64) {
+    let refused = SERVER_STATS[dns_server_index].refused_count.fetch_add(1, Ordering::Relaxed);
+    let fastest = SERVER_STATS[dns_server_index].fastest_count.load(Ordering::Relaxed);
+    (fastest, refused + 1)
+}
 
-   arr
+/// Get current stats for a DNS server
+/// Returns (fastest_count, refused_count)
+#[inline]
+pub fn get_stats(dns_server_index: usize) -> (u64, u64) {
+    let fastest = SERVER_STATS[dns_server_index].fastest_count.load(Ordering::Relaxed);
+    let refused = SERVER_STATS[dns_server_index].refused_count.load(Ordering::Relaxed);
+    (fastest, refused)
+}
+
+/// Display statistics for a DNS server
+pub fn display_server_stats(dns_server_index: usize) -> String {
+    let (fastest, _) = get_stats(dns_server_index);
+    format!("{}\n  fastest: {}\n", DNS_SERVERS[dns_server_index].socket_addr.ip(), fastest)
 }

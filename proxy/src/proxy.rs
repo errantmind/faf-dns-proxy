@@ -16,8 +16,7 @@ You should have received a copy of the GNU Affero General Public License
 along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
-pub static mut STATS: once_cell::sync::Lazy<[crate::stats::Stats; crate::statics::DNS_SERVERS.len()]> =
-   once_cell::sync::Lazy::new(crate::stats::init_stats);
+// STATS removed - now using atomic counters in stats.rs module
 
 pub async fn go(port: u16) {
    let proxy = tokio::task::spawn(async move {

@@ -217,10 +217,7 @@ async fn handle_reads(
                "Upstream DNS server {} refused to answer the question or the question was malformed",
                crate::statics::DNS_SERVERS[upstream_dns_index].socket_addr
             );
-            unsafe { 
-                let stats_ptr = std::ptr::addr_of_mut!(crate::proxy::STATS);
-                crate::stats::Stats::array_increment_refused(&mut *(*stats_ptr).as_mut(), upstream_dns_index) 
-            };
+            crate::stats::increment_refused(upstream_dns_index);
 
             // Clean up timing cache entry even for refused responses to prevent permanent delays
             let cache_key = crate::dns::get_query_unique_id(udp_segment_no_tcp_prefix.as_ptr(), udp_segment_no_tcp_prefix.len());
@@ -308,38 +305,32 @@ async fn handle_reads(
                let cache_entry = crate::dns::create_cache_entry_from_response(&dns_response, udp_segment_no_tcp_prefix);
                crate::cache::answer_cache_insert(cache_key.to_vec(), cache_entry);
 
-               unsafe {
-                  if !crate::statics::ARGS.daemon {
-                     let (fastest_count, refused_count) =
-                        {
-                            let stats_ptr = std::ptr::addr_of_mut!(crate::proxy::STATS);
-                            crate::stats::Stats::array_increment_fastest(&mut *(*stats_ptr).as_mut(), upstream_dns_index)
-                        };
-                     let mut output = format!(
-                        "{:>4}ms -> {:<50} {:>7} {:>3} {:>15} {:>7} {:>7}",
-                        dns_response.elapsed_ms,
-                        dns_response.site_name,
-                        dns_response.qtype_str,
-                        dns_response.qclass_str,
-                        format!("{}", crate::statics::DNS_SERVERS[upstream_dns_index].socket_addr.ip()).as_str(),
-                        format!("[{}]", fastest_count),
-                        format!("[{}]", refused_count),
+               if !crate::statics::ARGS.daemon {
+                  let (fastest_count, refused_count) = crate::stats::increment_fastest(upstream_dns_index);
+                  let mut output = format!(
+                     "{:>4}ms -> {:<50} {:>7} {:>3} {:>15} {:>7} {:>7}",
+                     dns_response.elapsed_ms,
+                     dns_response.site_name,
+                     dns_response.qtype_str,
+                     dns_response.qclass_str,
+                     format!("{}", crate::statics::DNS_SERVERS[upstream_dns_index].socket_addr.ip()).as_str(),
+                     format!("[{}]", fastest_count),
+                     format!("[{}]", refused_count),
+                  );
+
+                  #[cfg(target_os = "linux")]
+                  if crate::statics::ARGS.client_ident {
+                     output = format!(
+                        "{} - {} ({}:{}) [{}]",
+                        output,
+                        client_pid_comm.map_or("UNKNOWN".to_string(), |(pid, comm)| format!("{}/{}", pid, comm)),
+                        saved_addr.ip(),
+                        saved_addr.port(),
+                        lookup_method,
                      );
-
-                     #[cfg(target_os = "linux")]
-                     if crate::statics::ARGS.client_ident {
-                        output = format!(
-                           "{} - {} ({}:{}) [{}]",
-                           output,
-                           client_pid_comm.map_or("UNKNOWN".to_string(), |(pid, comm)| format!("{}/{}", pid, comm)),
-                           saved_addr.ip(),
-                           saved_addr.port(),
-                           lookup_method,
-                        );
-                     }
-
-                     println!("{}", output);
                   }
+
+                  println!("{}", output);
                }
             }
          }
