@@ -41,9 +41,15 @@ pub struct Args {
    /// [linux only] attempt to find the source pid and program name for each dns request.
    /// Requests must be local to the same host as faf-dns-proxy.
    /// Requires root to identify privileged processes.
-   /// Adds significant overhead to each request, ballpark +10ms. Recommended for diagnostic use only.
+   /// Uses eBPF for high-performance monitoring when available, falls back to netlink (+10ms overhead).
    #[clap(long)]
    pub client_ident: bool,
+
+   /// [linux only] force use of netlink method for client identification, bypassing eBPF fast path.
+   /// Only has effect when --client-ident is also specified.
+   /// Useful for debugging or systems where eBPF is not available.
+   #[clap(long)]
+   pub force_netlink: bool,
 
    /// at regular intervals (shown in non-daemon output), create a chart representing the distribution of DNS query -> response times.
    /// Charts are saved to the data directory.

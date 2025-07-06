@@ -16,7 +16,6 @@ You should have received a copy of the GNU Affero General Public License
 along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
-
 pub static mut STATS: once_cell::sync::Lazy<[crate::stats::Stats; crate::statics::DNS_SERVERS.len()]> =
    once_cell::sync::Lazy::new(crate::stats::init_stats);
 
@@ -39,6 +38,26 @@ pub async fn go(port: u16) {
       let mut query_buf = vec![0; 514];
 
       let mut cache_hits: u64 = 0;
+
+      // Print header for DNS output when not in daemon mode
+      if !crate::statics::ARGS.daemon {
+         #[cfg(target_os = "linux")]
+         let header = if crate::statics::ARGS.client_ident {
+            format!(
+               "  {:>4} -> {:<50} {:>7} {:>3} {:>15} {:>7} {:>7} - {:>40}",
+               "TIME", "DOMAIN", "TYPE", "CLS", "UPSTREAM", "FAST", "REF", "PROCESS (CLIENT) [METHOD]"
+            )
+         } else {
+            format!("  {:>4} -> {:<50} {:>7} {:>3} {:>15} {:>7} {:>7}", "TIME", "DOMAIN", "TYPE", "CLS", "UPSTREAM", "FAST", "REF")
+         };
+
+         #[cfg(not(target_os = "linux"))]
+         let header =
+            format!("  {:>4} -> {:<50} {:>7} {:>3} {:>15} {:>7} {:>7}", "TIME", "DOMAIN", "TYPE", "CLS", "UPSTREAM", "FAST", "REF");
+
+         println!("{}", header);
+         println!("{}", "=".repeat(header.len()));
+      }
 
       loop {
          // We reserve the first 2 bytes for the message length which is required for DNS over TCP

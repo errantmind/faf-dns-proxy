@@ -6,7 +6,7 @@ FaF has been tested on Linux, Mac (M1), and Windows, and may work on other platf
 
 ![](diagram.png)
 
-An example of the default (non-daemon) output, which gives some immediate insights into timings and upstream DNS resolver performance. This also demonstrates the 'client identification' feature which is optional as it adds about 10ms of latency:
+An example of the default (non-daemon) output, which gives some immediate insights into timings and upstream DNS resolver performance. This also demonstrates the 'client identification' feature with eBPF fast path (microsecond latency) and netlink fallback:
 
 ![Non-Daemon Output Example with 'client identification'](output2.png)
 
@@ -20,7 +20,7 @@ An example of the default (non-daemon) output, which gives some immediate insigh
 ## Features
 
 - DNS filtering (e.g. adblock - disabled by default)
-- Client identification - Identify which process are issuing what queries on your computer (linux only, disabled by default)
+- High-performance client identification using eBPF with netlink fallback (Linux only, disabled by default)
 - Chart output to show the distribution of uncached dns query latencies (disabled by default)
 - Full-duplex async design.
 - Minimal parsing of DNS records to lower overhead.
@@ -49,7 +49,7 @@ There is no configuration file as the defaults will serve most users well. If yo
 
 ## How To Use This (Linux)?
 
-1. Clone this repository and build it using `cargo +nightly build --release`.
+1. Clone this repository and build it using `cargo +nightly build --release` (or with eBPF support: `cargo +nightly build --release --features ebpf-client-ident`).
 2. Stop your existing DNS resolver. See the next section for an example.
 3. Run the binary with elevated privileges so it can listen on port 53 (DNS).
 4. Navigate to some websites to check and see if it is working. You should see resolution information for each website you visit your terminal. If you don't, you may need to disable your brower's built-in DNS proxying service. This is usually in your brower's network settings and may be called `DoH` or `DNS over HTTPS`.
@@ -80,6 +80,18 @@ options no-check-names
 5. If it is working, you can script it to run at startup.
 
 If you have a problem, and suddenly realize you can't search the internet for answers anymore because your DNS is broken, undo the changes to your system's DNS settings.
+
+## Client Identification (Linux Only)
+
+FaF DNS Proxy includes advanced client identification features to show which processes are making DNS requests:
+
+- **eBPF Fast Path**: Uses kernel-level eBPF probes for microsecond-latency process identification
+- **Netlink Fallback**: Falls back to netlink/procfs when eBPF is unavailable (~10ms overhead)
+- **Build with**: `--features ebpf-client-ident` for eBPF support
+- **Runtime**: Use `--client-ident` flag, automatically detects and uses best available method
+- **Force fallback**: Use `--force-netlink` to bypass eBPF for debugging
+
+The output shows `[EBPF]` or `[NETLINK]` to indicate which method was used.
 
 ## Misc Notes
 

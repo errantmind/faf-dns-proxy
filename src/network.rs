@@ -29,6 +29,16 @@ lazy_static::lazy_static! {
       dashmap::DashMap::default();
 }
 
+#[cfg(target_os = "linux")]
+static EBPF_CLIENT_MANAGER: once_cell::sync::Lazy<crate::ebpf_client::EbpfClientManager> = 
+   once_cell::sync::Lazy::new(|| {
+      let manager = crate::ebpf_client::EbpfClientManager::new();
+      if crate::statics::ARGS.client_ident && !crate::statics::ARGS.force_netlink {
+         manager.initialize();
+      }
+      manager
+   });
+
 // Router interface functions
 pub fn router_insert(key: u64, value: std::net::SocketAddrV4) {
    BUF_ID_ROUTER.insert(key, value);
@@ -230,13 +240,30 @@ async fn handle_reads(
                let saved_addr = router_get(crate::util::encode_id_and_hash32_to_u64(id, crate::util::hash32(cache_key))).unwrap();
 
                #[cfg(target_os = "linux")]
-               let (stat_maybe, lookup_method) = if crate::statics::ARGS.client_ident {
-                  let socket_info = crate::inspect_client::get_socket_info(&saved_addr);
-                  if let Some(socket_info) = socket_info {
-                     let stat = crate::inspect_client::find_pid_by_socket_inode(socket_info.header.inode as u64);
-                     (stat, "NETLINK")
+               let (client_pid_comm, lookup_method) = if crate::statics::ARGS.client_ident {
+                  // Try eBPF fast path first
+                  if !crate::statics::ARGS.force_netlink {
+                     if let Some(client_info) = EBPF_CLIENT_MANAGER.lookup_client_info(*saved_addr) {
+                        (Some((client_info.pid as i32, client_info.process_name)), client_info.lookup_method)
+                     } else {
+                        // Fallback to netlink if eBPF didn't find anything
+                        let socket_info = crate::inspect_client::get_socket_info(&saved_addr);
+                        if let Some(socket_info) = socket_info {
+                           let stat = crate::inspect_client::find_pid_by_socket_inode(socket_info.header.inode as u64);
+                           (stat.map(|s| (s.pid, s.comm)), "NETLINK")
+                        } else {
+                           (None, "NETLINK")
+                        }
+                     }
                   } else {
-                     (None, "NETLINK")
+                     // Force netlink mode
+                     let socket_info = crate::inspect_client::get_socket_info(&saved_addr);
+                     if let Some(socket_info) = socket_info {
+                        let stat = crate::inspect_client::find_pid_by_socket_inode(socket_info.header.inode as u64);
+                        (stat.map(|s| (s.pid, s.comm)), "NETLINK")
+                     } else {
+                        (None, "NETLINK")
+                     }
                   }
                } else {
                   (None, "")
@@ -284,7 +311,7 @@ async fn handle_reads(
                         output = format!(
                            "{} - {} ({}:{}) [{}]",
                            output,
-                           stat_maybe.map_or("UNKNOWN".to_string(), |x| format!("{}/{}", x.pid, x.comm)),
+                           client_pid_comm.map_or("UNKNOWN".to_string(), |(pid, comm)| format!("{}/{}", pid, comm)),
                            saved_addr.ip(),
                            saved_addr.port(),
                            lookup_method,
