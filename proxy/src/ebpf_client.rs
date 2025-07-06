@@ -62,20 +62,18 @@ impl EbpfClientManager {
       #[cfg(feature = "ebpf-client-ident")]
       {
          match DnsMonitor::new() {
-            Ok(mut monitor) => {
-               match monitor.start_monitoring() {
-                  Ok(_) => {
-                     if let Ok(mut guard) = self.monitor.lock() {
-                        *guard = Some(monitor);
-                        //eprintln!("eBPF DNS monitoring initialized successfully - using fast path");
-                        return true;
-                     }
-                  }
-                  Err(e) => {
-                     eprintln!("Failed to start eBPF monitoring: {}. Falling back to netlink.", e);
+            Ok(mut monitor) => match monitor.start_monitoring() {
+               Ok(_) => {
+                  if let Ok(mut guard) = self.monitor.lock() {
+                     *guard = Some(monitor);
+                     eprintln!("eBPF DNS monitoring initialized successfully - using fast path\n");
+                     return true;
                   }
                }
-            }
+               Err(e) => {
+                  eprintln!("Failed to start eBPF monitoring: {}. Falling back to netlink.", e);
+               }
+            },
             Err(e) => {
                eprintln!("Failed to create eBPF monitor: {}. Falling back to netlink.", e);
             }
@@ -84,7 +82,7 @@ impl EbpfClientManager {
 
       #[cfg(not(feature = "ebpf-client-ident"))]
       {
-         eprintln!("eBPF support not compiled in. Using netlink fallback.");
+         eprintln!("eBPF support not compiled in. Using netlink fallback.\n");
       }
 
       false
