@@ -217,7 +217,10 @@ async fn handle_reads(
                "Upstream DNS server {} refused to answer the question or the question was malformed",
                crate::statics::DNS_SERVERS[upstream_dns_index].socket_addr
             );
-            unsafe { crate::stats::Stats::array_increment_refused(crate::proxy::STATS.as_mut(), upstream_dns_index) };
+            unsafe { 
+                let stats_ptr = std::ptr::addr_of_mut!(crate::proxy::STATS);
+                crate::stats::Stats::array_increment_refused(&mut *(*stats_ptr).as_mut(), upstream_dns_index) 
+            };
 
             // Clean up timing cache entry even for refused responses to prevent permanent delays
             let cache_key = crate::dns::get_query_unique_id(udp_segment_no_tcp_prefix.as_ptr(), udp_segment_no_tcp_prefix.len());
@@ -308,7 +311,10 @@ async fn handle_reads(
                unsafe {
                   if !crate::statics::ARGS.daemon {
                      let (fastest_count, refused_count) =
-                        crate::stats::Stats::array_increment_fastest(crate::proxy::STATS.as_mut(), upstream_dns_index);
+                        {
+                            let stats_ptr = std::ptr::addr_of_mut!(crate::proxy::STATS);
+                            crate::stats::Stats::array_increment_fastest(&mut *(*stats_ptr).as_mut(), upstream_dns_index)
+                        };
                      let mut output = format!(
                         "{:>4}ms -> {:<50} {:>7} {:>3} {:>15} {:>7} {:>7}",
                         dns_response.elapsed_ms,
