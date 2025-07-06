@@ -282,7 +282,7 @@ int trace_prctl_enter(struct trace_event_raw_sys_enter* ctx) {
     if (option != PR_SET_NAME)
         return 0;
     
-    __u32 pid = bpf_get_current_pid_tgid() >> 32;
+    __u32 pid = bpf_get_current_pid_tgid() & 0xFFFFFFFF;  // Get TGID (main process PID)
     char *new_name = (char *)ctx->args[1];
     
     if (!new_name)
