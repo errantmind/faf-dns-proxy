@@ -1,0 +1,22 @@
+[package]
+name = "faf-dns-intercept"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "faf_dns_intercept"
+path = "src/lib.rs"
+
+[[bin]]
+name = "main"
+path = "src/bin/main.rs"
+
+[[example]]
+name = "simple_usage"
+path = "examples/simple_usage.rs"
+
+[dependencies]
+libbpf-rs = "0.25"
+plain = "0.2"
+libc = { workspace = true }
+ctrlc = "3.4"

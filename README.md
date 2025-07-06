@@ -2,6 +2,10 @@
 
 `FaF DNS Proxy` is a cross-platform, encrypted DNS (DoT) proxy / forwarder written in Rust. It follows the general design philosophy of the [FaF Web Server](https://www.github.com/errantmind/faf).
 
+**Project Structure**: This is a Cargo workspace containing two crates:
+- `proxy/` - Main DNS proxy application
+- `intercept/` - eBPF-based client identification library
+
 FaF has been tested on Linux, Mac (M1), and Windows, and may work on other platforms as well.
 
 ![](diagram.png)
@@ -49,7 +53,7 @@ There is no configuration file as the defaults will serve most users well. If yo
 
 ## How To Use This (Linux)?
 
-1. Clone this repository and build it using `cargo +nightly build --release` (or with eBPF support: `cargo +nightly build --release --features ebpf-client-ident`).
+1. Clone this repository and build it using `cargo build --release -p faf-dns-proxy` (or with eBPF support: `cargo build --release -p faf-dns-proxy --features ebpf-client-ident`).
 2. Stop your existing DNS resolver. See the next section for an example.
 3. Run the binary with elevated privileges so it can listen on port 53 (DNS).
 4. Navigate to some websites to check and see if it is working. You should see resolution information for each website you visit your terminal. If you don't, you may need to disable your brower's built-in DNS proxying service. This is usually in your brower's network settings and may be called `DoH` or `DNS over HTTPS`.
@@ -73,7 +77,7 @@ options no-check-names
 
 ## How To Use This (Windows)?
 
-1. Clone this repository and build it using `cargo +nightly build --release`.
+1. Clone this repository and build it using `cargo build --release -p faf-dns-proxy`.
 2. Open Powershell and run the newly built binary. It should not require elevated privileges, but you may need to run Powershell as administrator on some versions of Windows.
 3. Navigate to your system's network settings and change your system's primary DNS resolver to 127.0.0.1. Leave the 'alternative' empty.
 4. Browse some websites to check and see if it is working. You should see resolution information for each website you visit in the Powershell window. If you don't, you may need to disable your brower's built-in DNS proxying service. This is usually in your brower's network settings and may be called `DoH` or `DNS over HTTPS`.
@@ -87,7 +91,7 @@ FaF DNS Proxy includes advanced client identification features to show which pro
 
 - **eBPF Fast Path**: Uses kernel-level eBPF probes for microsecond-latency process identification
 - **Netlink Fallback**: Falls back to netlink/procfs when eBPF is unavailable (~10ms overhead)
-- **Build with**: `--features ebpf-client-ident` for eBPF support
+- **Build with**: `cargo build --release -p faf-dns-proxy --features ebpf-client-ident` for eBPF support
 - **Runtime**: Use `--client-ident` flag, automatically detects and uses best available method
 - **Force fallback**: Use `--force-netlink` to bypass eBPF for debugging
 
@@ -101,7 +105,7 @@ The output shows `[EBPF]` or `[NETLINK]` to indicate which method was used.
 
 ## Code Tour
 
-Just look at `proxy.rs`, everything is either there or referenced there.
+Get started by looking at `proxy/src/proxy.rs`.
 
 ## Contributions
 

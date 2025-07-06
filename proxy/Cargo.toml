@@ -1,0 +1,87 @@
+[package]
+name = "faf-dns-proxy"
+version = "1.1.0"
+authors = ["James Bates <errantmind@protonmail.com>"]
+edition = "2021"
+
+
+# Profiles inherited from workspace
+
+[features]
+default = []
+ebpf-client-ident = ["faf-dns-intercept"]
+
+[dependencies]
+# error handling
+anyhow = { workspace = true }
+
+clap = { version = "4.5.40", default-features = true, features = ["derive"] }
+lazy_static = "1.5.0"
+once_cell = "1.19.0"
+webpki-roots = "1.0.1"
+
+dashmap = { version = "5.5.3", default-features = true, features = ["inline"] }
+
+# faster channel
+kanal = "0.1.1"
+
+# async runtime/executor
+tokio = { workspace = true }
+tokio-rustls = { version = "0.25.0", features = ["default", "early-data"] }
+
+# walk directories, enumerating files
+walkdir = "2.5.0"
+
+# easy serialization and deserialization
+serde = { version = "1.0.219", default-features = false, features = ["derive"] }
+
+# disk storage format
+bincode = { version = "1.3.3", default-features = false }
+
+# compression
+flate2 = { version = "1.1.2", default-features = false, features = ["zlib"] }
+
+# http
+reqwest = "0.11.27"
+
+# chrono, parse rfc2822 dates from http Last-Modified header
+chrono = "0.4.41"
+
+# fast hasher
+xxhash-rust = { version = "0.8.15", features = ["xxh3"] }
+
+# faster hasher for keys that are particular primitives
+nohash-hasher = "0.2.0"
+
+# charts to visualize distribution of latency
+charming = { version = "0.3.1", default-features = true }
+
+[build-dependencies]
+anyhow = { workspace = true }
+which = "4.4.2"
+
+[dev-dependencies]
+fastrand = "2.3.0"
+
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# get pid of sending process (if local machine)
+netlink-packet-core = "0.7.0"
+netlink-packet-sock-diag = "0.4.2"
+netlink-sys = "0.8.5"
+procfs = "0.16.0"
+# faster alloc
+tcmalloc = { version = "0.3.0", default-features = false, features = [
+    "bundled",
+] }
+# system calls
+libc = { workspace = true }
+# high-performance DNS client identification via eBPF (optional)
+faf-dns-intercept = { path = "../intercept", optional = true }
+
+[target.'cfg(any(all(any(target_arch = "arm", target_arch = "aarch64"), target_feature = "aes", target_feature = "neon"), all(any(target_arch = "x86", target_arch = "x86_64"), target_feature = "aes", target_feature = "sse2")))'.dependencies]
+gxhash = "3.5.0"
+
+[target.'cfg(not(any(all(any(target_arch = "arm", target_arch = "aarch64"), target_feature = "aes", target_feature = "neon"), all(any(target_arch = "x86", target_arch = "x86_64"), target_feature = "aes", target_feature = "sse2"))))'.dependencies]
+ahash = "0.8.12"
+
