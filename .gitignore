@@ -5,3 +5,4 @@
 /tests
 /src/scratch.rs
 /benches
+intercept/src/vmlinux.h
