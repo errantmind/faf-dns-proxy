@@ -70,5 +70,5 @@ fn print_version() {
 // Disable stack probing as an optimization.
 // https://metricpanda.com/rival-fortress-update-45-dealing-with-__chkstk-__chkstk_ms-when-cross-compiling-for-windows/
 #[cfg(target_os = "linux")]
-#[no_mangle]
+#[unsafe(no_mangle)]
 extern "C" fn __chkstk() {}

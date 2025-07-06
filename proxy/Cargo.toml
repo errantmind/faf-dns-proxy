@@ -2,7 +2,7 @@
 name = "faf-dns-proxy"
 version = "1.1.0"
 authors = ["James Bates <errantmind@protonmail.com>"]
-edition = "2021"
+edition = "2024"
 
 
 # Profiles inherited from workspace
