@@ -30,14 +30,17 @@ lazy_static::lazy_static! {
 }
 
 #[cfg(target_os = "linux")]
-static EBPF_CLIENT_MANAGER: once_cell::sync::Lazy<crate::ebpf_client::EbpfClientManager> = 
-   once_cell::sync::Lazy::new(|| {
-      let manager = crate::ebpf_client::EbpfClientManager::new();
-      if crate::statics::ARGS.client_ident && !crate::statics::ARGS.force_netlink {
-         manager.initialize();
-      }
-      manager
-   });
+static EBPF_CLIENT_MANAGER: once_cell::sync::OnceCell<crate::ebpf_client::EbpfClientManager> = 
+   once_cell::sync::OnceCell::new();
+
+#[cfg(target_os = "linux")]
+pub fn initialize_ebpf_client_manager() {
+   let manager = crate::ebpf_client::EbpfClientManager::new();
+   if crate::statics::ARGS.client_ident && !crate::statics::ARGS.force_netlink {
+      manager.initialize();
+   }
+   EBPF_CLIENT_MANAGER.set(manager).ok();
+}
 
 // Router interface functions
 pub fn router_insert(key: u64, value: std::net::SocketAddrV4) {
@@ -243,10 +246,21 @@ async fn handle_reads(
                let (client_pid_comm, lookup_method) = if crate::statics::ARGS.client_ident {
                   // Try eBPF fast path first
                   if !crate::statics::ARGS.force_netlink {
-                     if let Some(client_info) = EBPF_CLIENT_MANAGER.lookup_client_info(*saved_addr) {
-                        (Some((client_info.pid as i32, client_info.process_name)), client_info.lookup_method)
+                     if let Some(manager) = EBPF_CLIENT_MANAGER.get() {
+                        if let Some(client_info) = manager.lookup_client_info(*saved_addr) {
+                           (Some((client_info.pid as i32, client_info.process_name)), client_info.lookup_method)
+                        } else {
+                           // Fallback to netlink if eBPF didn't find anything
+                           let socket_info = crate::inspect_client::get_socket_info(&saved_addr);
+                           if let Some(socket_info) = socket_info {
+                              let stat = crate::inspect_client::find_pid_by_socket_inode(socket_info.header.inode as u64);
+                              (stat.map(|s| (s.pid, s.comm)), "NETLINK")
+                           } else {
+                              (None, "NETLINK")
+                           }
+                        }
                      } else {
-                        // Fallback to netlink if eBPF didn't find anything
+                        // eBPF manager not initialized, fallback to netlink
                         let socket_info = crate::inspect_client::get_socket_info(&saved_addr);
                         if let Some(socket_info) = socket_info {
                            let stat = crate::inspect_client::find_pid_by_socket_inode(socket_info.header.inode as u64);

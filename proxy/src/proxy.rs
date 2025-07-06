@@ -34,6 +34,10 @@ pub async fn go(port: u16) {
          tx_channels.push(tx);
       }
 
+      // Initialize eBPF client identification before starting main loop
+      #[cfg(target_os = "linux")]
+      crate::network::initialize_ebpf_client_manager();
+
       // 2 bytes reserved for the TCP length + 512 bytes for the DNS query (which is defacto maximum)
       let mut query_buf = vec![0; 514];
 
