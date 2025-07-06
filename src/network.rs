@@ -29,16 +29,16 @@ lazy_static::lazy_static! {
       dashmap::DashMap::default();
 }
 
-
 // Router interface functions
 pub fn router_insert(key: u64, value: std::net::SocketAddrV4) {
    BUF_ID_ROUTER.insert(key, value);
 }
 
-pub fn router_get(key: u64) -> Option<dashmap::mapref::one::Ref<'static, u64, std::net::SocketAddrV4, nohash_hasher::BuildNoHashHasher<u64>>> {
+pub fn router_get(
+   key: u64,
+) -> Option<dashmap::mapref::one::Ref<'static, u64, std::net::SocketAddrV4, nohash_hasher::BuildNoHashHasher<u64>>> {
    BUF_ID_ROUTER.get(&key)
 }
-
 
 pub async fn upstream_tls_handler(
    client_msg_rx: kanal::AsyncReceiver<Vec<u8>>,
@@ -205,11 +205,11 @@ async fn handle_reads(
                crate::statics::DNS_SERVERS[upstream_dns_index].socket_addr
             );
             unsafe { crate::stats::Stats::array_increment_refused(crate::proxy::STATS.as_mut(), upstream_dns_index) };
-            
+
             // Clean up timing cache entry even for refused responses to prevent permanent delays
             let cache_key = crate::dns::get_query_unique_id(udp_segment_no_tcp_prefix.as_ptr(), udp_segment_no_tcp_prefix.len());
             crate::cache::timing_cache_remove(cache_key);
-            
+
             offset += udp_segment_len + 2;
 
             if offset == tls_bytes_read {
@@ -223,7 +223,7 @@ async fn handle_reads(
          {
             let id = crate::dns::get_id_network_byte_order(udp_segment_no_tcp_prefix.as_ptr(), udp_segment_no_tcp_prefix.len());
             let cache_key = crate::dns::get_query_unique_id(udp_segment_no_tcp_prefix.as_ptr(), udp_segment_no_tcp_prefix.len());
-            
+
             // Atomically remove timing cache entry to ensure only first response is processed
             if let Some((_, timing_entry)) = crate::cache::timing_cache_remove(cache_key) {
                // copy the address for now to minimize chances of a collision
@@ -260,13 +260,14 @@ async fn handle_reads(
 
                let mut dns_response = crate::dns::process_dns_response(udp_segment_no_tcp_prefix, Some(timing_entry.asked_at));
                dns_response.cache_key = cache_key.to_vec(); // Use the original cache key consistently
-               
+
                let cache_entry = crate::dns::create_cache_entry_from_response(&dns_response, udp_segment_no_tcp_prefix);
                crate::cache::answer_cache_insert(cache_key.to_vec(), cache_entry);
 
                unsafe {
                   if !crate::statics::ARGS.daemon {
-                     let (fastest_count, refused_count) = crate::stats::Stats::array_increment_fastest(crate::proxy::STATS.as_mut(), upstream_dns_index);
+                     let (fastest_count, refused_count) =
+                        crate::stats::Stats::array_increment_fastest(crate::proxy::STATS.as_mut(), upstream_dns_index);
                      let mut output = format!(
                         "{:>4}ms -> {:<50} {:>7} {:>3} {:>15} {:>7} {:>7}",
                         dns_response.elapsed_ms,
