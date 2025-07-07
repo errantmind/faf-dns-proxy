@@ -30,8 +30,7 @@ lazy_static::lazy_static! {
 }
 
 #[cfg(target_os = "linux")]
-static EBPF_CLIENT_MANAGER: once_cell::sync::OnceCell<crate::ebpf_client::EbpfClientManager> = 
-   once_cell::sync::OnceCell::new();
+static EBPF_CLIENT_MANAGER: once_cell::sync::OnceCell<crate::ebpf_client::EbpfClientManager> = once_cell::sync::OnceCell::new();
 
 #[cfg(target_os = "linux")]
 pub fn initialize_ebpf_client_manager() {

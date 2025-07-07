@@ -16,7 +16,6 @@ You should have received a copy of the GNU Affero General Public License
 along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
-
 /// Gets duration since UNIX_EPOCH in milliseconds
 #[inline]
 pub fn _get_unix_ts_nanos() -> u128 {

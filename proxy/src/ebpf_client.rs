@@ -115,11 +115,7 @@ impl EbpfClientManager {
    pub fn is_active(&self) -> bool {
       #[cfg(feature = "ebpf-client-ident")]
       {
-         if let Ok(guard) = self.monitor.lock() {
-            guard.is_some()
-         } else {
-            false
-         }
+         if let Ok(guard) = self.monitor.lock() { guard.is_some() } else { false }
       }
 
       #[cfg(not(feature = "ebpf-client-ident"))]

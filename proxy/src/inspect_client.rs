@@ -32,13 +32,13 @@ lazy_static::lazy_static! {
 // ref: https://man7.org/linux/man-pages/man7/sock_diag.7.html
 // ref: https://github.com/rust-netlink/netlink-packet-sock-diag/blob/main/examples/dump_ipv4.rs
 pub fn get_socket_info(source_socket: &std::net::SocketAddrV4) -> Option<Box<netlink_packet_sock_diag::inet::InetResponse>> {
-   use netlink_packet_core::{NetlinkHeader, NetlinkMessage, NetlinkPayload, NLM_F_DUMP, NLM_F_REQUEST};
+   use netlink_packet_core::{NLM_F_DUMP, NLM_F_REQUEST, NetlinkHeader, NetlinkMessage, NetlinkPayload};
    use netlink_packet_sock_diag::{
+      SockDiagMessage,
       constants::*,
       inet::{ExtensionFlags, InetRequest, SocketId, StateFlags},
-      SockDiagMessage,
    };
-   use netlink_sys::{protocols::NETLINK_SOCK_DIAG, Socket, SocketAddr};
+   use netlink_sys::{Socket, SocketAddr, protocols::NETLINK_SOCK_DIAG};
 
    let mut nlsocket = match Socket::new(NETLINK_SOCK_DIAG) {
       Ok(socket) => socket,
@@ -47,7 +47,7 @@ pub fn get_socket_info(source_socket: &std::net::SocketAddrV4) -> Option<Box<net
          return None;
       }
    };
-   
+
    let _port_number = match nlsocket.bind_auto() {
       Ok(addr) => addr.port_number(),
       Err(err) => {
@@ -55,7 +55,7 @@ pub fn get_socket_info(source_socket: &std::net::SocketAddrV4) -> Option<Box<net
          return None;
       }
    };
-   
+
    if let Err(err) = nlsocket.connect(&SocketAddr::new(0, 0)) {
       eprintln!("Failed to connect netlink socket: {} at {}:{}", err, file!(), line!());
       return None;

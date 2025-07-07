@@ -17,7 +17,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
 //! Domain filtering module for DNS queries
-//! 
+//!
 //! This module provides a unified interface for domain filtering functionality,
 //! including blocklist management, domain extraction, and response generation.
 
@@ -66,11 +66,7 @@ pub async fn process_domain_filtering(
 ) -> FilterResult {
    if !crate::statics::ARGS.blocklists {
       let (question, primary_domain) = extract_domain_info(udp_segment);
-      return FilterResult {
-         is_blocked: false,
-         question,
-         primary_domain,
-      };
+      return FilterResult { is_blocked: false, question, primary_domain };
    }
 
    let (question, primary_domain) = extract_domain_info(udp_segment);
@@ -83,7 +79,7 @@ pub async fn process_domain_filtering(
       {
          // Convert query to blocked response
          create_blocked_response(udp_segment);
-         
+
          // Send blocked response to client
          let wrote_len_maybe = listener_socket.send_to(udp_segment, client_addr).await;
 
@@ -106,11 +102,7 @@ pub async fn process_domain_filtering(
       }
    }
 
-   FilterResult {
-      is_blocked: domain_is_blocked,
-      question,
-      primary_domain,
-   }
+   FilterResult { is_blocked: domain_is_blocked, question, primary_domain }
 }
 
 /// Create a blocked response (NXDOMAIN) from a DNS query
@@ -144,8 +136,5 @@ pub async fn get_blocklist_count() -> usize {
 
 /// Get the total number of blocked domains (for diagnostics)
 pub async fn get_blocked_domain_count() -> usize {
-   BLOCKLISTS.lock().await
-      .iter()
-      .map(|blocklist| blocklist.blocked_domains.len())
-      .sum()
+   BLOCKLISTS.lock().await.iter().map(|blocklist| blocklist.blocked_domains.len()).sum()
 }

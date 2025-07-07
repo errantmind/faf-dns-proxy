@@ -1,8 +1,8 @@
 //! Public types for the eBPF DNS monitoring library
 
 use plain::Plain;
-use std::net::{Ipv4Addr, SocketAddrV4};
 use std::fmt;
+use std::net::{Ipv4Addr, SocketAddrV4};
 
 /// Information about a process in the process tree
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -41,12 +41,12 @@ impl DnsRequestInfo {
     pub fn source_socket_addr(&self) -> SocketAddrV4 {
         SocketAddrV4::new(self.source_addr, self.source_port)
     }
-    
+
     /// Get the destination socket address
     pub fn destination_socket_addr(&self) -> SocketAddrV4 {
         SocketAddrV4::new(self.destination_addr, self.destination_port)
     }
-    
+
     /// Get a formatted process tree string
     pub fn process_tree_string(&self) -> String {
         if self.process_tree.is_empty() {
@@ -115,37 +115,29 @@ impl UdpPacketInfo {
             .unwrap_or("?")
             .trim_end_matches('\0')
             .to_string();
-        
+
         let source_addr = if self.flags & 1 != 0 && self.saddr != 0 {
             Ipv4Addr::from(u32::from_be(self.saddr))
         } else {
             Ipv4Addr::new(0, 0, 0, 0)
         };
-        
-        let source_port = if self.flags & 2 != 0 {
-            self.sport
-        } else {
-            0
-        };
-        
+
+        let source_port = if self.flags & 2 != 0 { self.sport } else { 0 };
+
         let destination_addr = if self.flags & 4 != 0 && self.daddr != 0 {
             Ipv4Addr::from(u32::from_be(self.daddr))
         } else {
             Ipv4Addr::new(0, 0, 0, 0)
         };
-        
-        let destination_port = if self.flags & 8 != 0 {
-            self.dport
-        } else {
-            0
-        };
-        
+
+        let destination_port = if self.flags & 8 != 0 { self.dport } else { 0 };
+
         let latency_us = if self.processing_end_ns > self.processing_start_ns {
             (self.processing_end_ns - self.processing_start_ns) / 1000
         } else {
             0
         };
-        
+
         let process_tree = if self.flags & 16 != 0 && self.tree_depth > 0 {
             self.tree[..self.tree_depth as usize]
                 .iter()
@@ -163,7 +155,7 @@ impl UdpPacketInfo {
         } else {
             vec![]
         };
-        
+
         DnsRequestInfo {
             pid: self.pid,
             process_name,

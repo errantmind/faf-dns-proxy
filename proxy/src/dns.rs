@@ -31,17 +31,13 @@ pub struct DnsResponseResult {
 }
 
 /// Processes a DNS response and extracts all necessary information for caching and logging
-pub fn process_dns_response(
-   udp_segment: &[u8],
-   asked_at_opt: Option<u128>,
-) -> DnsResponseResult {
+pub fn process_dns_response(udp_segment: &[u8], asked_at_opt: Option<u128>) -> DnsResponseResult {
    let elapsed_ms = match asked_at_opt {
       Some(asked_at) => crate::util::get_unix_ts_millis() - asked_at,
       None => 0,
    };
 
-   let (site_name, qtype_str, qclass_str, mut ttl) =
-      get_question_as_string_and_lowest_ttl(udp_segment.as_ptr(), udp_segment.len());
+   let (site_name, qtype_str, qclass_str, mut ttl) = get_question_as_string_and_lowest_ttl(udp_segment.as_ptr(), udp_segment.len());
 
    // Apply minimum TTL override
    if ttl < crate::statics::MINIMUM_TTL_OVERRIDE {
@@ -58,13 +54,8 @@ pub fn process_dns_response(
    }
 }
 
-
-
 /// Creates a cache entry from a processed DNS response
-pub fn create_cache_entry_from_response(
-   response_result: &DnsResponseResult,
-   udp_segment: &[u8],
-) -> crate::cache::AnswerCacheEntry {
+pub fn create_cache_entry_from_response(response_result: &DnsResponseResult, udp_segment: &[u8]) -> crate::cache::AnswerCacheEntry {
    crate::cache::AnswerCacheEntry {
       answer: udp_segment.to_vec(),
       elapsed_ms: response_result.elapsed_ms,
@@ -265,10 +256,10 @@ pub fn get_question_as_string_and_lowest_ttl(dns_buf_start: *const u8, len: usiz
             // I've noticed this is hit for 'cdn.fluidpreview.office.net'
             println!(
                "          {} parse malfunction. DNS may be misconfigured for this domain. TTL could not be determined, using {}s",
-               question_str, 500
+               question_str, 10
             );
 
-            return (question_str, map_qtype_to_str(qtype), map_qclass_to_str(qclass), 500);
+            return (question_str, map_qtype_to_str(qtype), map_qclass_to_str(qclass), 10);
          }
 
          let size_be = *(dns_qname_qtype_qclass_walker as *const _ as *const u32);
@@ -281,7 +272,6 @@ pub fn get_question_as_string_and_lowest_ttl(dns_buf_start: *const u8, len: usiz
       (question_str, map_qtype_to_str(qtype), map_qclass_to_str(qclass), ttl as u64)
    }
 }
-
 
 #[inline]
 pub fn check_for_rcode_refused(dns_buf: &[u8]) -> Option<bool> {

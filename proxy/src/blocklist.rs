@@ -54,7 +54,6 @@ pub async fn get_blocklists() -> Vec<BlocklistFile> {
       blocklist_files.push(manual_blocklist);
    }
 
-  
    let mut tasks = Vec::with_capacity(crate::statics::BLOCKLISTS.len());
    for url in crate::statics::BLOCKLISTS.iter() {
       let task = tokio::spawn(async move {
