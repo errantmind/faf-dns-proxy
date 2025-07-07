@@ -47,16 +47,16 @@ pub async fn go(port: u16) {
          #[cfg(target_os = "linux")]
          let header = if crate::statics::ARGS.client_ident {
             format!(
-               "  {:>4} -> {:<50} {:>7} {:>3} {:>7} {:>23} {:>7} - {:>40}",
+               "  {:>4} -> {:<50} {:>7} {:>3} {:>7} {:^23} {:>7} - {:>40}",
                "TIME", "DOMAIN", "TYPE", "CLS", "TTL", "UPSTREAM", "REF", "PROCESS (CLIENT) [METHOD]"
             )
          } else {
-            format!("  {:>4} -> {:<50} {:>7} {:>3} {:>7} {:>23} {:>7}", "TIME", "DOMAIN", "TYPE", "CLS", "TTL", "UPSTREAM", "REF")
+            format!("  {:>4} -> {:<50} {:>7} {:>3} {:>7} {:^23} {:>7}", "TIME", "DOMAIN", "TYPE", "CLS", "TTL", "UPSTREAM", "REF")
          };
 
          #[cfg(not(target_os = "linux"))]
          let header =
-            format!("  {:>4} -> {:<50} {:>7} {:>3} {:>7} {:>23} {:>7}", "TIME", "DOMAIN", "TYPE", "CLS", "TTL", "UPSTREAM", "REF");
+            format!("  {:>4} -> {:<50} {:>7} {:>3} {:>7} {:^23} {:>7}", "TIME", "DOMAIN", "TYPE", "CLS", "TTL", "UPSTREAM", "REF");
 
          println!("{}", header);
          println!("{}", "=".repeat(header.len()));
