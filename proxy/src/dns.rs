@@ -38,7 +38,6 @@ pub fn process_dns_response(udp_segment: &[u8], asked_at_opt: Option<u128>) -> D
    };
 
    let (site_name, qtype_str, qclass_str, mut ttl) = get_question_as_string_and_lowest_ttl(udp_segment.as_ptr(), udp_segment.len());
-
    // Apply minimum TTL override
    if ttl < crate::statics::MINIMUM_TTL_OVERRIDE {
       ttl = crate::statics::MINIMUM_TTL_OVERRIDE;
@@ -90,26 +89,59 @@ pub fn map_qtype_to_str(qtype: u16) -> &'static str {
       5 => "CNAME",
       6 => "SOA",
       12 => "PTR",
+      13 => "HINFO",
       15 => "MX",
       16 => "TXT",
+      17 => "RP",
+      18 => "AFSDB",
+      24 => "SIG",
+      25 => "KEY",
       28 => "AAAA",
+      29 => "LOC",
       33 => "SRV",
+      35 => "NAPTR",
+      36 => "KX",
+      37 => "CERT",
+      39 => "DNAME",
       41 => "OPT",
+      42 => "APL",
       43 => "DS",
+      44 => "SSHFP",
+      45 => "IPSECKEY",
       46 => "RRSIG",
       47 => "NSEC",
       48 => "DNSKEY",
+      49 => "DHCID",
       50 => "NSEC3",
       51 => "NSEC3PARAM",
       52 => "TLSA",
-      59 => "CAA",
+      53 => "SMIMEA",
+      55 => "HIP",
+      56 => "NINFO",
+      57 => "RKEY",
+      58 => "TALINK",
+      59 => "CDS",
+      60 => "CDNSKEY",
+      61 => "OPENPGPKEY",
+      62 => "CSYNC",
+      63 => "ZONEMD",
+      64 => "SVCB",
+      65 => "HTTPS",
       99 => "SPF",
+      108 => "EUI48",
+      109 => "EUI64",
+      249 => "TKEY",
       250 => "TSIG",
       251 => "IXFR",
       252 => "AXFR",
+      253 => "MAILB",
+      254 => "MAILA",
       255 => "ANY",
       256 => "URI",
       257 => "CAA",
+      258 => "AVC",
+      259 => "DOA",
+      260 => "AMTRELAY",
       32768 => "TA",
       32769 => "DLV",
       _ => "UNKNOWN",
@@ -267,6 +299,11 @@ pub fn get_question_as_string_and_lowest_ttl(dns_buf_start: *const u8, len: usiz
          if latest_ttl < ttl {
             ttl = latest_ttl;
          }
+      }
+
+      // If no answers were processed (NXDOMAIN/NODATA), set TTL to 0
+      if num_answers == 0 {
+         ttl = 0;
       }
 
       (question_str, map_qtype_to_str(qtype), map_qclass_to_str(qclass), ttl as u64)
