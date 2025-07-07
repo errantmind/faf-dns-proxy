@@ -307,13 +307,13 @@ async fn handle_reads(
                if !crate::statics::ARGS.daemon {
                   let (fastest_count, refused_count) = crate::stats::increment_fastest(upstream_dns_index);
                   let mut output = format!(
-                     "{:>4}ms -> {:<50} {:>7} {:>3} {:>15} {:>7} {:>7}",
+                     "{:>4}ms -> {:<50} {:>7} {:>3} {:>7} {:>23} {:>7}",
                      dns_response.elapsed_ms,
                      dns_response.site_name,
                      dns_response.qtype_str,
                      dns_response.qclass_str,
-                     format!("{}", crate::statics::DNS_SERVERS[upstream_dns_index].socket_addr.ip()).as_str(),
-                     format!("[{}]", fastest_count),
+                     format!("{}s", dns_response.ttl),
+                     format!("{} [{}]", crate::statics::DNS_SERVERS[upstream_dns_index].socket_addr.ip(), fastest_count),
                      format!("[{}]", refused_count),
                   );
 
