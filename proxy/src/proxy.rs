@@ -85,9 +85,11 @@ pub async fn go(port: u16) {
 
          // if the question / query is already in the question cache but not the answer cache, we delay for 50ms.
          // TODO: This is a temporary solution to prevent situation I ran into where I have thousands of simultaneous DNS requests to the same domain.
-         if crate::cache::timing_cache_get(cache_key) {
-            eprintln!("Query has not been answered yet. Delaying for 100ms");
-            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+         if let Some(asked_at) = crate::cache::timing_cache_get_asked_at(cache_key) {
+            let diff = crate::util::get_unix_ts_millis() - asked_at;
+            let delay = if diff < 50 { 50 - diff } else { 0 };
+            eprintln!("Query has not been answered in the last {}ms. Delaying for {}ms", diff, delay);
+            tokio::time::sleep(tokio::time::Duration::from_millis(delay as u64)).await;
          }
 
          // First check the ANSWER cache and respond immediately if we already have an answer to the query
