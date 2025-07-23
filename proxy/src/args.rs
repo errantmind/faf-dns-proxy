@@ -59,4 +59,8 @@ pub struct Args {
    /// enable SNI (Server Name Indication) in TLS connections to upstream DNS servers.
    #[clap(long)]
    pub sni: bool,
+
+   /// block all IPv6 (AAAA) DNS queries by returning NXDOMAIN responses.
+   #[clap(long)]
+   pub disable_ipv6: bool,
 }

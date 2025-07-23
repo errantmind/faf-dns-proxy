@@ -58,18 +58,50 @@ pub fn extract_domain_info(udp_segment: &[u8]) -> (String, String) {
    (question, primary_domain)
 }
 
+/// Check if a query is for IPv6 (AAAA record)
+#[inline]
+fn is_ipv6_query(udp_segment: &[u8]) -> bool {
+   const AAAA_QTYPE: u16 = 28;
+   let qtype = crate::dns::get_qtype_from_query(udp_segment.as_ptr(), udp_segment.len());
+   qtype == AAAA_QTYPE
+}
+
 /// Check if a domain is blocked and handle the response
 pub async fn process_domain_filtering(
    udp_segment: &mut [u8],
    listener_socket: &UdpSocket,
    client_addr: &std::net::SocketAddr,
 ) -> FilterResult {
-   if !crate::statics::ARGS.blocklists {
-      let (question, primary_domain) = extract_domain_info(udp_segment);
-      return FilterResult { is_blocked: false, question, primary_domain };
+   let (question, primary_domain) = extract_domain_info(udp_segment);
+
+   // Check IPv6 blocking first (independent of blocklists)
+   if crate::statics::ARGS.disable_ipv6 && is_ipv6_query(udp_segment) {
+      // Convert query to blocked response (NXDOMAIN)
+      create_blocked_response(udp_segment);
+
+      // Send blocked response to client
+      let wrote_len_maybe = listener_socket.send_to(udp_segment, client_addr).await;
+
+      if let Ok(wrote_len) = wrote_len_maybe {
+         if wrote_len == 0 {
+            eprintln!("Failed to write IPv6 blocked response to the client. 0 bytes written at {}:{}", file!(), line!());
+         }
+      } else {
+         eprintln!(
+            "Failed to write IPv6 blocked response to the client with error: {} at {}:{}",
+            wrote_len_maybe.unwrap_err(),
+            file!(),
+            line!()
+         );
+      }
+
+      return FilterResult { is_blocked: true, question, primary_domain };
    }
 
-   let (question, primary_domain) = extract_domain_info(udp_segment);
+   // Check domain blocklists (only if --blocklists is enabled)
+   if !crate::statics::ARGS.blocklists {
+      return FilterResult { is_blocked: false, question, primary_domain };
+   }
 
    // Check if domain is blocked
    let mut domain_is_blocked = false;
