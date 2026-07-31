@@ -70,10 +70,6 @@ netlink-packet-core = "0.7.0"
 netlink-packet-sock-diag = "0.4.2"
 netlink-sys = "0.8.5"
 procfs = "0.16.0"
-# faster alloc
-tcmalloc = { version = "0.3.0", default-features = false, features = [
-    "bundled",
-] }
 # system calls
 libc = { workspace = true }
 # high-performance DNS client identification via eBPF (optional)
