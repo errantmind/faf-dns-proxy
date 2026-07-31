@@ -196,8 +196,8 @@ async fn handle_reads(
       }
 
       if udp_segment_len > crate::dns::MAX_DNS_MESSAGE_SIZE {
-         // FaF supports DNS messages up to 512 bytes. Skip larger responses
-         // so we can continue using this connection.
+         // Skip responses above FaF's supported UDP payload size so we can
+         // continue using this connection.
          let mut limited_reader = (&mut read_half).take(udp_segment_len as u64);
          let mut sink = tokio::io::sink();
          let discard_result = tokio::select! {

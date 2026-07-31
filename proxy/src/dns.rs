@@ -20,9 +20,10 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 /// Maximum DNS message size supported by the proxy.
 ///
-/// This is the traditional DNS-over-UDP payload limit. Larger EDNS(0) and
-/// DNS-over-TCP/TLS responses are consumed and skipped by the network layer.
-pub const MAX_DNS_MESSAGE_SIZE: usize = 512;
+/// 1232 bytes accommodates most modern DNS responses while generally avoiding
+/// IP fragmentation. Avoids common DNSSEC timeouts. Larger DNS-over-TCP/TLS
+/// responses are consumed and skipped.
+pub const MAX_DNS_MESSAGE_SIZE: usize = 1232;
 
 /// Represents the result of processing a DNS response
 pub struct DnsResponseResult {

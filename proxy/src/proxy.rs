@@ -37,8 +37,8 @@ pub async fn go(port: u16) {
       #[cfg(target_os = "linux")]
       crate::network::initialize_ebpf_client_manager();
 
-      // 2 bytes reserved for the TCP length + 512 bytes for the DNS query (which is defacto maximum)
-      let mut query_buf = vec![0; 514];
+      // Reserve 2 bytes for the DNS-over-TCP length prefix.
+      let mut query_buf = vec![0; crate::dns::MAX_DNS_MESSAGE_SIZE + 2];
 
       let mut cache_hits: u64 = 0;
 
@@ -71,7 +71,7 @@ pub async fn go(port: u16) {
                continue;
             }
          };
-         assert!(read_bytes <= 512, "Received a datagram with > 512 bytes on the UDP socket");
+         assert!(read_bytes <= crate::dns::MAX_DNS_MESSAGE_SIZE, "Received an oversized datagram on the UDP socket");
          let udp_segment = &mut query_buf[2..read_bytes + 2];
 
          // Process domain filtering
