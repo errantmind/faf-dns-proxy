@@ -16,17 +16,10 @@ You should have received a copy of the GNU Affero General Public License
 along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
-lazy_static::lazy_static! {
-   // When we receive a request from a client, we may have the answer cached or we will request it from upstream. However,
-   // when we receive a response from an upstream server we need to know which client to send it to. So, to route responses
-   // to the correct client, we need to identify the correct client with something in the response itself, which knows nothing of
-   // the client. We use a combination of the ID and the QNAME, QTYPE, and QCLASS of the Question (all of which are unchanged
-   // in the response) to identify the client. The chance of a collision is negligible, even more so since this applies only
-   // to uncached requests.
-   // We use a DashMap (hashmap) for thread safety with a NoHashHasher for additional performance (which is a
-   // no-op hasher) over particular types like u64.
-   static ref BUF_ID_ROUTER: dashmap::DashMap<u64, std::net::SocketAddrV4, nohash_hasher::BuildNoHashHasher<u64>> =
-      dashmap::DashMap::default();
+#[derive(Clone)]
+pub struct UpstreamQuery {
+   pub data: Vec<u8>,
+   pub deadline: tokio::time::Instant,
 }
 
 #[cfg(target_os = "linux")]
@@ -41,19 +34,8 @@ pub fn initialize_ebpf_client_manager() {
    EBPF_CLIENT_MANAGER.set(manager).ok();
 }
 
-// Router interface functions
-pub fn router_insert(key: u64, value: std::net::SocketAddrV4) {
-   BUF_ID_ROUTER.insert(key, value);
-}
-
-pub fn router_get(
-   key: u64,
-) -> Option<dashmap::mapref::one::Ref<'static, u64, std::net::SocketAddrV4, nohash_hasher::BuildNoHashHasher<u64>>> {
-   BUF_ID_ROUTER.get(&key)
-}
-
 pub async fn upstream_tls_handler(
-   client_msg_rx: kanal::AsyncReceiver<Vec<u8>>,
+   client_msg_rx: kanal::AsyncReceiver<UpstreamQuery>,
    upstream_dns_index: usize,
    listener_addr: std::sync::Arc<tokio::net::UdpSocket>,
 ) {
@@ -103,10 +85,10 @@ pub async fn upstream_tls_handler(
 
 async fn handle_writes(
    mut write_half: tokio::io::WriteHalf<tokio_rustls::client::TlsStream<tokio::net::TcpStream>>,
-   msg_rx: kanal::AsyncReceiver<Vec<u8>>,
-   unsent_previous_query_maybe: Option<Vec<u8>>,
+   msg_rx: kanal::AsyncReceiver<UpstreamQuery>,
+   unsent_previous_query_maybe: Option<UpstreamQuery>,
    mut shutdown_writer_rx: tokio::sync::oneshot::Receiver<bool>,
-) -> (kanal::AsyncReceiver<Vec<u8>>, Option<Vec<u8>>) {
+) -> (kanal::AsyncReceiver<UpstreamQuery>, Option<UpstreamQuery>) {
    // In the event we had an issue previously, we begin by resuming the previous failed request
    if let Some(unsent_previous_query) = unsent_previous_query_maybe {
       if let Some(unsent_data) = write(&mut write_half, unsent_previous_query).await {
@@ -146,16 +128,20 @@ async fn handle_writes(
 
 async fn write(
    write_half: &mut tokio::io::WriteHalf<tokio_rustls::client::TlsStream<tokio::net::TcpStream>>,
-   query_buf: Vec<u8>,
-) -> Option<Vec<u8>> {
+   query: UpstreamQuery,
+) -> Option<UpstreamQuery> {
    use tokio::io::AsyncWriteExt;
 
-   match write_half.write_all(&query_buf).await {
+   if query.deadline <= tokio::time::Instant::now() {
+      return None;
+   }
+
+   match write_half.write_all(&query.data).await {
       Ok(_) => match write_half.flush().await {
          Ok(_) => None,
-         Err(_) => Some(query_buf),
+         Err(_) => Some(query),
       },
-      Err(_) => Some(query_buf),
+      Err(_) => Some(query),
    }
 }
 
@@ -232,21 +218,13 @@ async fn handle_reads(
 
       let udp_segment_no_tcp_prefix = &response_buf[..udp_segment_len];
 
-      let is_refused_maybe = crate::dns::check_for_rcode_refused(udp_segment_no_tcp_prefix);
-
-      if is_refused_maybe.is_some() && is_refused_maybe.unwrap() || is_refused_maybe.is_none() {
-         // The upstream DNS server refused to answer the question. This isn't particularly useful to us so we skip these answers.
-         // I added a check for REFUSED because, on one occasion, one of the upstream DNS servers would only return REFUSED to any query.
+      if crate::dns::check_for_usable_response(udp_segment_no_tcp_prefix) != Some(true) {
+         // Keep the flight open so another upstream can still return a usable NOERROR or NXDOMAIN response.
          eprintln!(
-            "Upstream DNS server {} refused to answer the question or the question was malformed",
+            "Upstream DNS server {} returned an unusable or malformed response",
             crate::statics::DNS_SERVERS[upstream_dns_index].socket_addr
          );
          crate::stats::increment_refused(upstream_dns_index);
-
-         // Clean up timing cache entry even for refused responses to prevent permanent delays
-         let cache_key = crate::dns::get_query_unique_id(udp_segment_no_tcp_prefix.as_ptr(), udp_segment_no_tcp_prefix.len());
-         crate::cache::timing_cache_remove(cache_key);
-
          continue;
       }
 
@@ -255,17 +233,16 @@ async fn handle_reads(
          let id = crate::dns::get_id_network_byte_order(udp_segment_no_tcp_prefix.as_ptr(), udp_segment_no_tcp_prefix.len());
          let cache_key = crate::dns::get_query_unique_id(udp_segment_no_tcp_prefix.as_ptr(), udp_segment_no_tcp_prefix.len());
 
-         // Atomically remove timing cache entry to ensure only first response is processed
-         if let Some((_, timing_entry)) = crate::cache::timing_cache_remove(cache_key) {
-            // copy the address for now to minimize chances of a collision
-            let saved_addr = router_get(crate::util::encode_id_and_hash32_to_u64(id, crate::util::hash32(cache_key))).unwrap();
+         // Atomically remove the in-flight query so only the first usable response is processed.
+         if let Some((in_flight, dns_response)) = crate::cache::in_flight_complete(cache_key, id, udp_segment_no_tcp_prefix) {
+            let saved_addr = in_flight.waiters[0].client_addr;
 
             #[cfg(target_os = "linux")]
             let (client_pid_comm, lookup_method) = if crate::statics::ARGS.client_ident {
                // Try eBPF fast path first
                if !crate::statics::ARGS.force_netlink {
                   if let Some(manager) = EBPF_CLIENT_MANAGER.get() {
-                     if let Some(client_info) = manager.lookup_client_info(*saved_addr) {
+                     if let Some(client_info) = manager.lookup_client_info(saved_addr) {
                         (Some((client_info.pid as i32, client_info.process_name)), client_info.lookup_method)
                      } else {
                         // Fallback to netlink if eBPF didn't find anything
@@ -301,7 +278,11 @@ async fn handle_reads(
                (None, "")
             };
 
-            let wrote_len_maybe = listener_addr.send_to(udp_segment_no_tcp_prefix, *saved_addr).await;
+            let mut answer = udp_segment_no_tcp_prefix.to_vec();
+            let mut waiters = in_flight.waiters.into_iter();
+            let first_waiter = waiters.next().unwrap();
+            crate::dns::set_id_network_byte_order(first_waiter.client_id, &mut answer);
+            let wrote_len_maybe = listener_addr.send_to(&answer, first_waiter.client_addr).await;
 
             if let Ok(wrote_len) = wrote_len_maybe {
                // Due to how rust implements IO for send_to, we will never have a len_written less than 0
@@ -309,19 +290,20 @@ async fn handle_reads(
                   eprintln!("Failed to write response to the client. 0 bytes written at {}:{}", file!(), line!());
                }
             } else {
-               eprintln!(
-                  "Failed to write cached response to the client with error: {} at {}:{}",
-                  wrote_len_maybe.unwrap_err(),
-                  file!(),
-                  line!()
-               );
+               eprintln!("Failed to write response to the client with error: {} at {}:{}", wrote_len_maybe.unwrap_err(), file!(), line!());
             }
 
-            let mut dns_response = crate::dns::process_dns_response(udp_segment_no_tcp_prefix, Some(timing_entry.asked_at));
-            dns_response.cache_key = cache_key.to_vec(); // Use the original cache key consistently
-
-            let cache_entry = crate::dns::create_cache_entry_from_response(&dns_response, udp_segment_no_tcp_prefix);
-            crate::cache::answer_cache_insert(cache_key.to_vec(), cache_entry);
+            if waiters.len() > 0 {
+               let listener_addr = listener_addr.clone();
+               tokio::task::spawn(async move {
+                  for waiter in waiters {
+                     crate::dns::set_id_network_byte_order(waiter.client_id, &mut answer);
+                     if let Err(err) = listener_addr.send_to(&answer, waiter.client_addr).await {
+                        eprintln!("Failed to write response to the client with error: {err}");
+                     }
+                  }
+               });
+            }
 
             if !crate::statics::ARGS.daemon {
                let (fastest_count, refused_count) = crate::stats::increment_fastest(upstream_dns_index);

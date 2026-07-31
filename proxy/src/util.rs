@@ -48,9 +48,7 @@ pub fn encode_id_and_hash32_to_u64(id: u16, hash32: u32) -> u64 {
 
 #[inline(always)]
 pub fn hash32(bytes: &[u8]) -> u32 {
-   use xxhash_rust::xxh3::xxh3_64;
-
-   let long_hash = xxh3_64(bytes);
+   let long_hash = rapidhash::v3::rapidhash_v3(bytes);
    let bitwise_xor_fold = (long_hash >> 32) ^ (long_hash & (!0u64 >> 32));
    bitwise_xor_fold as u32
 }

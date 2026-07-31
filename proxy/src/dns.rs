@@ -32,7 +32,6 @@ pub struct DnsResponseResult {
    pub qclass_str: &'static str,
    pub ttl: u64,
    pub elapsed_ms: u128,
-   pub cache_key: Vec<u8>,
 }
 
 /// Processes a DNS response and extracts all necessary information for caching and logging
@@ -48,14 +47,7 @@ pub fn process_dns_response(udp_segment: &[u8], asked_at_opt: Option<u128>) -> D
       ttl = crate::statics::MINIMUM_TTL_OVERRIDE;
    }
 
-   DnsResponseResult {
-      site_name,
-      qtype_str,
-      qclass_str,
-      ttl,
-      elapsed_ms,
-      cache_key: Vec::new(), // Will be set by caller with the original cache key
-   }
+   DnsResponseResult { site_name, qtype_str, qclass_str, ttl, elapsed_ms }
 }
 
 /// Creates a cache entry from a processed DNS response
@@ -65,6 +57,20 @@ pub fn create_cache_entry_from_response(response_result: &DnsResponseResult, udp
       elapsed_ms: response_result.elapsed_ms,
       expires_at: crate::util::get_unix_ts_secs() + response_result.ttl,
    }
+}
+
+#[inline]
+pub fn create_servfail_response(dns_buf: &mut [u8]) -> Option<()> {
+   if dns_buf.len() < 12 {
+      return None;
+   }
+
+   // Set QR and RA, clear answer/authority/additional counts, and set RCODE to SERVFAIL.
+   dns_buf[2] |= 0b1000_0000;
+   dns_buf[3] = (dns_buf[3] & 0b0001_0000) | 0b1000_0010;
+   dns_buf[6..12].fill(0);
+
+   Some(())
 }
 
 #[inline]
@@ -340,11 +346,42 @@ pub fn get_qtype_from_query(dns_buf_start: *const u8, len: usize) -> u16 {
 }
 
 #[inline]
-pub fn check_for_rcode_refused(dns_buf: &[u8]) -> Option<bool> {
-   // Check the RCODE for REFUSED
-   if dns_buf.len() < 4 {
+pub fn check_for_usable_response(dns_buf: &[u8]) -> Option<bool> {
+   if dns_buf.len() < 17 || dns_buf[2] & 0b1000_0000 == 0 || dns_buf[4..6] != [0, 1] {
       return None;
    }
 
-   Some(dns_buf[3] & 0b0000_1111 == 0b0000_1011)
+   let mut qname_offset = 12;
+   loop {
+      let label_len = *dns_buf.get(qname_offset)? as usize;
+      if label_len == 0 {
+         if qname_offset + 5 > dns_buf.len() {
+            return None;
+         }
+         break;
+      }
+      if label_len > 63 || qname_offset + label_len + 1 >= dns_buf.len() {
+         return None;
+      }
+      qname_offset += label_len + 1;
+   }
+
+   Some(matches!(dns_buf[3] & 0b0000_1111, 0 | 3))
+}
+
+#[test]
+fn create_servfail_response_test() {
+   let mut query = [0u8; 19];
+   query[2] = 0b0000_0001;
+   query[3] = 0b0001_1111;
+   query[5] = 1;
+   query[7] = 2;
+   query[9] = 3;
+   query[11] = 4;
+
+   create_servfail_response(&mut query);
+
+   assert_eq!(query[2], 0b1000_0001);
+   assert_eq!(query[3], 0b1001_0010);
+   assert_eq!(&query[4..12], &[0, 1, 0, 0, 0, 0, 0, 0]);
 }

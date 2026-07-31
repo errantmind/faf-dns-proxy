@@ -25,10 +25,10 @@ pub async fn go(port: u16) {
          std::sync::Arc::new(tokio::net::UdpSocket::bind(listener_addr).await.unwrap())
       };
 
-      let mut tx_channels: Vec<kanal::AsyncSender<Vec<u8>>> = Vec::with_capacity(crate::statics::DNS_SERVERS.len());
+      let mut tx_channels: Vec<kanal::AsyncSender<crate::network::UpstreamQuery>> = Vec::with_capacity(crate::statics::DNS_SERVERS.len());
 
       for (dns_server_index, _) in crate::statics::DNS_SERVERS.iter().enumerate() {
-         let (tx, rx) = kanal::bounded_async::<Vec<u8>>(8192);
+         let (tx, rx) = kanal::bounded_async::<crate::network::UpstreamQuery>(8192);
          tokio::task::spawn(crate::network::upstream_tls_handler(rx, dns_server_index, listener_socket.clone()));
          tx_channels.push(tx);
       }
@@ -36,6 +36,38 @@ pub async fn go(port: u16) {
       // Initialize eBPF client identification before starting main loop
       #[cfg(target_os = "linux")]
       crate::network::initialize_ebpf_client_manager();
+
+      {
+         let listener_socket = listener_socket.clone();
+         tokio::task::spawn(async move {
+            let mut interval = tokio::time::interval(tokio::time::Duration::from_millis(100));
+            loop {
+               interval.tick().await;
+               for entry in crate::cache::in_flight_take_expired(tokio::time::Instant::now()) {
+                  let mut response = entry.query_template;
+                  crate::dns::create_servfail_response(&mut response);
+                  let mut waiters = entry.waiters.into_iter();
+                  let first_waiter = waiters.next().unwrap();
+                  crate::dns::set_id_network_byte_order(first_waiter.client_id, &mut response);
+                  if let Err(err) = listener_socket.send_to(&response, first_waiter.client_addr).await {
+                     eprintln!("Failed to send timed out response to the client with error: {err}");
+                  }
+
+                  if waiters.len() > 0 {
+                     let listener_socket = listener_socket.clone();
+                     tokio::task::spawn(async move {
+                        for waiter in waiters {
+                           crate::dns::set_id_network_byte_order(waiter.client_id, &mut response);
+                           if let Err(err) = listener_socket.send_to(&response, waiter.client_addr).await {
+                              eprintln!("Failed to send timed out response to the client with error: {err}");
+                           }
+                        }
+                     });
+                  }
+               }
+            }
+         });
+      }
 
       // Reserve 2 bytes for the DNS-over-TCP length prefix.
       let mut query_buf = vec![0; crate::dns::MAX_DNS_MESSAGE_SIZE + 2];
@@ -82,18 +114,10 @@ pub async fn go(port: u16) {
 
          let id = crate::dns::get_id_network_byte_order(udp_segment.as_ptr(), udp_segment.len());
          let cache_key = crate::dns::get_query_unique_id(udp_segment.as_ptr(), udp_segment.len());
-
-         // if the question / query is already in the question cache but not the answer cache, we delay for 50ms.
-         // TODO: This is a temporary solution to prevent situation I ran into where I have thousands of simultaneous DNS requests to the same domain.
-         if let Some(asked_at) = crate::cache::timing_cache_get_asked_at(cache_key) {
-            let diff = crate::util::get_unix_ts_millis() - asked_at;
-            let delay = if diff < 50 { 50 - diff } else { 0 };
-            eprintln!("Query has not been answered in the last {}ms. Delaying for {}ms", diff, delay);
-            tokio::time::sleep(tokio::time::Duration::from_millis(delay as u64)).await;
-         }
+         let current_time = crate::util::get_unix_ts_secs();
 
          // First check the ANSWER cache and respond immediately if we already have an answer to the query
-         if let Some(cached_response) = crate::cache::answer_cache_get_mut_check_expiry(cache_key, crate::util::get_unix_ts_secs()) {
+         if let Some(cached_response) = crate::cache::answer_cache_get_mut_check_expiry(cache_key, current_time) {
             let mut answer = cached_response.answer;
             crate::dns::set_id_network_byte_order(id, &mut answer);
             let wrote_len_maybe = listener_socket.send_to(&answer, &client_addr).await;
@@ -139,28 +163,45 @@ pub async fn go(port: u16) {
             continue;
          }
 
-         // We don't have it cached. Add to QUESTION cache
-         crate::cache::timing_cache_insert(
-            cache_key.to_vec(),
-            crate::cache::TimingCacheEntry { asked_at: crate::util::get_unix_ts_millis() },
-         );
-
-         // Save the client state
          let client_addr_ipv4 = match client_addr {
             std::net::SocketAddr::V4(value) => value,
             _ => std::unreachable!(),
          };
-         let cache_key = crate::dns::get_query_unique_id(udp_segment.as_ptr(), udp_segment.len());
+         let registration = crate::cache::in_flight_register(
+            cache_key,
+            udp_segment,
+            crate::cache::InFlightWaiter { client_addr: client_addr_ipv4, client_id: id },
+            current_time,
+         );
 
-         crate::network::router_insert(crate::util::encode_id_and_hash32_to_u64(id, crate::util::hash32(cache_key)), client_addr_ipv4);
+         match registration {
+            crate::cache::InFlightRegistration::Cached(cached_response) => {
+               let mut answer = cached_response.answer;
+               crate::dns::set_id_network_byte_order(id, &mut answer);
+               if let Err(err) = listener_socket.send_to(&answer, client_addr_ipv4).await {
+                  eprintln!("Failed to write cached response to the client with error: {err}");
+               }
+            }
+            crate::cache::InFlightRegistration::Joined => (),
+            crate::cache::InFlightRegistration::Overflow => {
+               crate::dns::create_servfail_response(udp_segment);
+               if let Err(err) = listener_socket.send_to(udp_segment, client_addr_ipv4).await {
+                  eprintln!("Failed to send overloaded response to the client with error: {err}");
+               }
+            }
+            crate::cache::InFlightRegistration::Leader { upstream_id, deadline } => {
+               crate::dns::set_id_network_byte_order(upstream_id, udp_segment);
 
-         // Write both bytes at once after converting to Big Endian
-         unsafe { *(query_buf.as_mut_ptr() as *mut u16) = (read_bytes as u16).to_be() };
-         for tx in &tx_channels {
-            match tx.send(query_buf[0..read_bytes + 2].to_vec()).await {
-               Ok(_) => (),
-               Err(err) => panic!("{}", err),
-            };
+               // Write both bytes at once after converting to Big Endian
+               unsafe { *(query_buf.as_mut_ptr() as *mut u16) = (read_bytes as u16).to_be() };
+               let query = crate::network::UpstreamQuery { data: query_buf[0..read_bytes + 2].to_vec(), deadline };
+               for tx in &tx_channels {
+                  match tx.send(query.clone()).await {
+                     Ok(_) => (),
+                     Err(err) => panic!("{}", err),
+                  };
+               }
+            }
          }
       }
    });
