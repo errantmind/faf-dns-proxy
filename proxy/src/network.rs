@@ -197,7 +197,7 @@ async fn handle_reads(
       let mut offset = 0;
       loop {
          let udp_segment_len = crate::dns::get_tcp_dns_size_prefix_le(&response_buf[offset..]);
-         if !udp_segment_len > 0 && !udp_segment_len <= 512 {
+         if udp_segment_len == 0 || udp_segment_len > 512 {
             panic!("Tcp reported len is invalid ({udp_segment_len})");
          };
          assert!(
