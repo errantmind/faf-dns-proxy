@@ -27,24 +27,11 @@ pub struct UpstreamDnsServer {
    pub socket_addr: std::net::SocketAddrV4,
 }
 
-pub const DNS_SERVERS: [UpstreamDnsServer; 6] = [
+pub const DNS_SERVERS: [UpstreamDnsServer; 4] = [
    UpstreamDnsServer { server_name: "one.one.one.one", socket_addr: std::net::SocketAddrV4::new(std::net::Ipv4Addr::new(1, 1, 1, 1), 853) },
    UpstreamDnsServer { server_name: "one.one.one.one", socket_addr: std::net::SocketAddrV4::new(std::net::Ipv4Addr::new(1, 0, 0, 1), 853) },
    UpstreamDnsServer { server_name: "dns.google", socket_addr: std::net::SocketAddrV4::new(std::net::Ipv4Addr::new(8, 8, 8, 8), 853) },
    UpstreamDnsServer { server_name: "dns.google", socket_addr: std::net::SocketAddrV4::new(std::net::Ipv4Addr::new(8, 8, 4, 4), 853) },
-   UpstreamDnsServer {
-      server_name: "p0.freedns.controld.com",
-      socket_addr: std::net::SocketAddrV4::new(std::net::Ipv4Addr::new(76, 76, 2, 0), 853),
-   },
-   UpstreamDnsServer {
-      server_name: "p0.freedns.controld.com",
-      socket_addr: std::net::SocketAddrV4::new(std::net::Ipv4Addr::new(76, 76, 10, 0), 853),
-   },
-   // Too slow
-   // UpstreamDnsServer {
-   //    server_name: "dns.mullvad.net",
-   //    socket_addr: std::net::SocketAddrV4::new(std::net::Ipv4Addr::new(194, 242, 2, 2), 853),
-   // },
 ];
 
 /// Blocklists to use for DNS filtering. The fiiles are downloaded and parsed at startup (if they have been updated upstream),
