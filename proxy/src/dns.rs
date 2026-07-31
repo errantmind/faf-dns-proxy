@@ -18,6 +18,12 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 // DNS packet structure reference: https://mislove.org/teaching/cs4700/spring11/handouts/project1-primer.pdf
 
+/// Maximum DNS message size supported by the proxy.
+///
+/// This is the traditional DNS-over-UDP payload limit. Larger EDNS(0) and
+/// DNS-over-TCP/TLS responses are consumed and skipped by the network layer.
+pub const MAX_DNS_MESSAGE_SIZE: usize = 512;
+
 /// Represents the result of processing a DNS response
 pub struct DnsResponseResult {
    pub site_name: String,
@@ -73,10 +79,8 @@ pub fn set_id_network_byte_order(new_id: u16, input: &mut [u8]) {
 }
 
 #[inline]
-pub fn get_tcp_dns_size_prefix_le(input: &[u8]) -> usize {
-   debug_assert!(input.len() >= 2);
-   let size_network_byte_order = unsafe { *(input as *const _ as *const u16) };
-   u16::swap_bytes(size_network_byte_order) as usize
+pub fn get_tcp_dns_size_prefix(input: &[u8; 2]) -> usize {
+   u16::from_be_bytes(*input) as usize
 }
 
 #[inline]

@@ -165,101 +165,110 @@ async fn handle_reads(
    listener_addr: std::sync::Arc<tokio::net::UdpSocket>,
    mut shutdown_reader_rx: tokio::sync::oneshot::Receiver<bool>,
 ) {
-   let mut response_buf = vec![0; 2 << 17];
+   use tokio::io::AsyncReadExt;
+
+   let mut response_buf = [0u8; crate::dns::MAX_DNS_MESSAGE_SIZE];
 
    loop {
-      let tls_bytes_read;
+      let mut length_prefix = [0u8; 2];
 
-      tokio::select! {
+      let prefix_result = tokio::select! {
          shutdown_msg = &mut shutdown_reader_rx => {
             match shutdown_msg {
-               Ok(_) => return,
-               Err(_) => panic!("Shutdown Channel has been closed prematurely")
-            };
-         },
-         read_result = tokio::io::AsyncReadExt::read(&mut read_half, &mut response_buf) => {
-            match read_result {
-               Ok(0) => {
-                  // The upstream closed the connection.
-                  // Many DNS servers, including Cloudflare, will close the connection after a short period of inactivity.
-                  return;
-               },
-               Ok(n) => tls_bytes_read = n,
-               Err(_) => {
-                  // Google DNS will occasionally close the connection without sending TLS close_notify.
-                  // This is against the RFC but we handle it anyway, along with any other errors.
-                  return;
-               }
+               Ok(_) | Err(_) => return,
             }
+         },
+         result = read_half.read_exact(&mut length_prefix) => result,
+      };
+
+      if prefix_result.is_err() {
+         // The upstream closed the connection or the read failed before a
+         // complete DNS-over-TCP length prefix was received.
+         return;
+      }
+
+      let udp_segment_len = crate::dns::get_tcp_dns_size_prefix(&length_prefix);
+
+      if udp_segment_len == 0 {
+         // A zero-length DNS-over-TCP frame is invalid, but its complete
+         // prefix has already been consumed. Ignore it without reconnecting.
+         continue;
+      }
+
+      if udp_segment_len > crate::dns::MAX_DNS_MESSAGE_SIZE {
+         // FaF supports DNS messages up to 512 bytes. Skip larger responses
+         // so we can continue using this connection.
+         let mut limited_reader = (&mut read_half).take(udp_segment_len as u64);
+         let mut sink = tokio::io::sink();
+         let discard_result = tokio::select! {
+            shutdown_msg = &mut shutdown_reader_rx => {
+               match shutdown_msg {
+                  Ok(_) | Err(_) => return,
+               }
+            },
+            result = tokio::io::copy(&mut limited_reader, &mut sink) => result,
+         };
+
+         match discard_result {
+            Ok(bytes) if bytes == udp_segment_len as u64 => continue,
+            _ => return,
          }
       }
 
-      let mut offset = 0;
-      loop {
-         let udp_segment_len = crate::dns::get_tcp_dns_size_prefix_le(&response_buf[offset..]);
-         if udp_segment_len == 0 || udp_segment_len > 512 {
-            panic!("Tcp reported len is invalid ({udp_segment_len})");
-         };
-         assert!(
-            udp_segment_len <= (tls_bytes_read - 2),
-            "Udp segment length cannot be larger than the TCP wrapper ({udp_segment_len}/{tls_bytes_read})"
-         );
-
-         let udp_segment_no_tcp_prefix = &response_buf[offset + 2..offset + udp_segment_len + 2];
-
-         let is_refused_maybe = crate::dns::check_for_rcode_refused(udp_segment_no_tcp_prefix);
-
-         if is_refused_maybe.is_some() && is_refused_maybe.unwrap() || is_refused_maybe.is_none() {
-            // The upstream DNS server refused to answer the question. This isn't particularly useful to us so we skip these answers.
-            // I added a check for REFUSED because, on one occasion, one of the upstream DNS servers would only return REFUSED to any query.
-            eprintln!(
-               "Upstream DNS server {} refused to answer the question or the question was malformed",
-               crate::statics::DNS_SERVERS[upstream_dns_index].socket_addr
-            );
-            crate::stats::increment_refused(upstream_dns_index);
-
-            // Clean up timing cache entry even for refused responses to prevent permanent delays
-            let cache_key = crate::dns::get_query_unique_id(udp_segment_no_tcp_prefix.as_ptr(), udp_segment_no_tcp_prefix.len());
-            crate::cache::timing_cache_remove(cache_key);
-
-            offset += udp_segment_len + 2;
-
-            if offset == tls_bytes_read {
-               break;
-            } else {
-               continue;
+      let body_result = tokio::select! {
+         shutdown_msg = &mut shutdown_reader_rx => {
+            match shutdown_msg {
+               Ok(_) | Err(_) => return,
             }
-         }
+         },
+         result = read_half.read_exact(&mut response_buf[..udp_segment_len]) => result,
+      };
 
-         // Scope for guards
-         {
-            let id = crate::dns::get_id_network_byte_order(udp_segment_no_tcp_prefix.as_ptr(), udp_segment_no_tcp_prefix.len());
-            let cache_key = crate::dns::get_query_unique_id(udp_segment_no_tcp_prefix.as_ptr(), udp_segment_no_tcp_prefix.len());
+      if body_result.is_err() {
+         // The upstream closed the connection or the read failed before the
+         // complete DNS response body was received.
+         return;
+      }
 
-            // Atomically remove timing cache entry to ensure only first response is processed
-            if let Some((_, timing_entry)) = crate::cache::timing_cache_remove(cache_key) {
-               // copy the address for now to minimize chances of a collision
-               let saved_addr = router_get(crate::util::encode_id_and_hash32_to_u64(id, crate::util::hash32(cache_key))).unwrap();
+      let udp_segment_no_tcp_prefix = &response_buf[..udp_segment_len];
 
-               #[cfg(target_os = "linux")]
-               let (client_pid_comm, lookup_method) = if crate::statics::ARGS.client_ident {
-                  // Try eBPF fast path first
-                  if !crate::statics::ARGS.force_netlink {
-                     if let Some(manager) = EBPF_CLIENT_MANAGER.get() {
-                        if let Some(client_info) = manager.lookup_client_info(*saved_addr) {
-                           (Some((client_info.pid as i32, client_info.process_name)), client_info.lookup_method)
-                        } else {
-                           // Fallback to netlink if eBPF didn't find anything
-                           let socket_info = crate::inspect_client::get_socket_info(&saved_addr);
-                           if let Some(socket_info) = socket_info {
-                              let stat = crate::inspect_client::find_pid_by_socket_inode(socket_info.header.inode as u64);
-                              (stat.map(|s| (s.pid, s.comm)), "NETLINK")
-                           } else {
-                              (None, "NETLINK")
-                           }
-                        }
+      let is_refused_maybe = crate::dns::check_for_rcode_refused(udp_segment_no_tcp_prefix);
+
+      if is_refused_maybe.is_some() && is_refused_maybe.unwrap() || is_refused_maybe.is_none() {
+         // The upstream DNS server refused to answer the question. This isn't particularly useful to us so we skip these answers.
+         // I added a check for REFUSED because, on one occasion, one of the upstream DNS servers would only return REFUSED to any query.
+         eprintln!(
+            "Upstream DNS server {} refused to answer the question or the question was malformed",
+            crate::statics::DNS_SERVERS[upstream_dns_index].socket_addr
+         );
+         crate::stats::increment_refused(upstream_dns_index);
+
+         // Clean up timing cache entry even for refused responses to prevent permanent delays
+         let cache_key = crate::dns::get_query_unique_id(udp_segment_no_tcp_prefix.as_ptr(), udp_segment_no_tcp_prefix.len());
+         crate::cache::timing_cache_remove(cache_key);
+
+         continue;
+      }
+
+      // Scope for guards
+      {
+         let id = crate::dns::get_id_network_byte_order(udp_segment_no_tcp_prefix.as_ptr(), udp_segment_no_tcp_prefix.len());
+         let cache_key = crate::dns::get_query_unique_id(udp_segment_no_tcp_prefix.as_ptr(), udp_segment_no_tcp_prefix.len());
+
+         // Atomically remove timing cache entry to ensure only first response is processed
+         if let Some((_, timing_entry)) = crate::cache::timing_cache_remove(cache_key) {
+            // copy the address for now to minimize chances of a collision
+            let saved_addr = router_get(crate::util::encode_id_and_hash32_to_u64(id, crate::util::hash32(cache_key))).unwrap();
+
+            #[cfg(target_os = "linux")]
+            let (client_pid_comm, lookup_method) = if crate::statics::ARGS.client_ident {
+               // Try eBPF fast path first
+               if !crate::statics::ARGS.force_netlink {
+                  if let Some(manager) = EBPF_CLIENT_MANAGER.get() {
+                     if let Some(client_info) = manager.lookup_client_info(*saved_addr) {
+                        (Some((client_info.pid as i32, client_info.process_name)), client_info.lookup_method)
                      } else {
-                        // eBPF manager not initialized, fallback to netlink
+                        // Fallback to netlink if eBPF didn't find anything
                         let socket_info = crate::inspect_client::get_socket_info(&saved_addr);
                         if let Some(socket_info) = socket_info {
                            let stat = crate::inspect_client::find_pid_by_socket_inode(socket_info.header.inode as u64);
@@ -269,7 +278,7 @@ async fn handle_reads(
                         }
                      }
                   } else {
-                     // Force netlink mode
+                     // eBPF manager not initialized, fallback to netlink
                      let socket_info = crate::inspect_client::get_socket_info(&saved_addr);
                      if let Some(socket_info) = socket_info {
                         let stat = crate::inspect_client::find_pid_by_socket_inode(socket_info.header.inode as u64);
@@ -279,66 +288,69 @@ async fn handle_reads(
                      }
                   }
                } else {
-                  (None, "")
-               };
-
-               let wrote_len_maybe = listener_addr.send_to(udp_segment_no_tcp_prefix, *saved_addr).await;
-
-               if let Ok(wrote_len) = wrote_len_maybe {
-                  // Due to how rust implements IO for send_to, we will never have a len_written less than 0
-                  if wrote_len == 0 {
-                     eprintln!("Failed to write response to the client. 0 bytes written at {}:{}", file!(), line!());
+                  // Force netlink mode
+                  let socket_info = crate::inspect_client::get_socket_info(&saved_addr);
+                  if let Some(socket_info) = socket_info {
+                     let stat = crate::inspect_client::find_pid_by_socket_inode(socket_info.header.inode as u64);
+                     (stat.map(|s| (s.pid, s.comm)), "NETLINK")
+                  } else {
+                     (None, "NETLINK")
                   }
-               } else {
-                  eprintln!(
-                     "Failed to write cached response to the client with error: {} at {}:{}",
-                     wrote_len_maybe.unwrap_err(),
-                     file!(),
-                     line!()
-                  );
                }
+            } else {
+               (None, "")
+            };
 
-               let mut dns_response = crate::dns::process_dns_response(udp_segment_no_tcp_prefix, Some(timing_entry.asked_at));
-               dns_response.cache_key = cache_key.to_vec(); // Use the original cache key consistently
+            let wrote_len_maybe = listener_addr.send_to(udp_segment_no_tcp_prefix, *saved_addr).await;
 
-               let cache_entry = crate::dns::create_cache_entry_from_response(&dns_response, udp_segment_no_tcp_prefix);
-               crate::cache::answer_cache_insert(cache_key.to_vec(), cache_entry);
-
-               if !crate::statics::ARGS.daemon {
-                  let (fastest_count, refused_count) = crate::stats::increment_fastest(upstream_dns_index);
-                  let mut output = format!(
-                     "{:>4}ms -> {:<50} {:>7} {:>3} {:>7} {:>15} {:<7} {:>7}",
-                     dns_response.elapsed_ms,
-                     dns_response.site_name,
-                     dns_response.qtype_str,
-                     dns_response.qclass_str,
-                     format!("{}s", dns_response.ttl),
-                     format!("{}", crate::statics::DNS_SERVERS[upstream_dns_index].socket_addr.ip()).as_str(),
-                     format!("[{}]", fastest_count),
-                     format!("[{}]", refused_count),
-                  );
-
-                  #[cfg(target_os = "linux")]
-                  if crate::statics::ARGS.client_ident {
-                     output = format!(
-                        "{} - {} ({}:{}) [{}]",
-                        output,
-                        client_pid_comm.map_or("UNKNOWN".to_string(), |(pid, comm)| format!("{}/{}", pid, comm)),
-                        saved_addr.ip(),
-                        saved_addr.port(),
-                        lookup_method,
-                     );
-                  }
-
-                  println!("{}", output);
+            if let Ok(wrote_len) = wrote_len_maybe {
+               // Due to how rust implements IO for send_to, we will never have a len_written less than 0
+               if wrote_len == 0 {
+                  eprintln!("Failed to write response to the client. 0 bytes written at {}:{}", file!(), line!());
                }
+            } else {
+               eprintln!(
+                  "Failed to write cached response to the client with error: {} at {}:{}",
+                  wrote_len_maybe.unwrap_err(),
+                  file!(),
+                  line!()
+               );
             }
-         }
 
-         offset += udp_segment_len + 2;
+            let mut dns_response = crate::dns::process_dns_response(udp_segment_no_tcp_prefix, Some(timing_entry.asked_at));
+            dns_response.cache_key = cache_key.to_vec(); // Use the original cache key consistently
 
-         if offset == tls_bytes_read {
-            break;
+            let cache_entry = crate::dns::create_cache_entry_from_response(&dns_response, udp_segment_no_tcp_prefix);
+            crate::cache::answer_cache_insert(cache_key.to_vec(), cache_entry);
+
+            if !crate::statics::ARGS.daemon {
+               let (fastest_count, refused_count) = crate::stats::increment_fastest(upstream_dns_index);
+               let mut output = format!(
+                  "{:>4}ms -> {:<50} {:>7} {:>3} {:>7} {:>15} {:<7} {:>7}",
+                  dns_response.elapsed_ms,
+                  dns_response.site_name,
+                  dns_response.qtype_str,
+                  dns_response.qclass_str,
+                  format!("{}s", dns_response.ttl),
+                  format!("{}", crate::statics::DNS_SERVERS[upstream_dns_index].socket_addr.ip()).as_str(),
+                  format!("[{}]", fastest_count),
+                  format!("[{}]", refused_count),
+               );
+
+               #[cfg(target_os = "linux")]
+               if crate::statics::ARGS.client_ident {
+                  output = format!(
+                     "{} - {} ({}:{}) [{}]",
+                     output,
+                     client_pid_comm.map_or("UNKNOWN".to_string(), |(pid, comm)| format!("{}/{}", pid, comm)),
+                     saved_addr.ip(),
+                     saved_addr.port(),
+                     lookup_method,
+                  );
+               }
+
+               println!("{}", output);
+            }
          }
       }
    }
