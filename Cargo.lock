@@ -387,7 +387,6 @@ dependencies = [
  "clap",
  "dashmap",
  "faf-dns-intercept",
- "fastrand",
  "flate2",
  "kanal",
  "lazy_static",

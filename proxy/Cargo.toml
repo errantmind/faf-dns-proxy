@@ -63,10 +63,6 @@ charming = { version = "0.3.1", default-features = true }
 anyhow = { workspace = true }
 which = "4.4.2"
 
-[dev-dependencies]
-fastrand = "2.3.0"
-
-
 [target.'cfg(target_os = "linux")'.dependencies]
 # get pid of sending process (if local machine)
 netlink-packet-core = "0.7.0"

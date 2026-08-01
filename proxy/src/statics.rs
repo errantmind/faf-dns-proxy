@@ -48,3 +48,13 @@ pub const MANUAL_DOMAIN_BLOCKLIST: [&str; 0] = [];
 /// Overrides TTL on DNS records to the value specified, if DNS record has a value lower than the value specified.
 /// To disable, set to 0.
 pub const MINIMUM_TTL_OVERRIDE: u64 = 0;
+
+/// Background refresh is deliberately bounded and lower priority than foreground DNS work.
+/// A cache generation can arm at most one refresh, and only a foreground cache hit can arm it.
+pub const BACKGROUND_REFRESH_ACTIVE_LIMIT: usize = 1024;
+pub const BACKGROUND_REFRESH_RATE_PER_SECOND: u32 = 16;
+pub const BACKGROUND_REFRESH_BURST: u32 = 4;
+pub const BACKGROUND_REFRESH_CONCURRENCY: usize = 4;
+pub const BACKGROUND_REFRESH_MIN_TTL: std::time::Duration = std::time::Duration::from_secs(5);
+pub const BACKGROUND_REFRESH_MARGIN: std::time::Duration = std::time::Duration::from_millis(250);
+pub const BACKGROUND_REFRESH_UPSTREAM_INDEX: usize = 0;

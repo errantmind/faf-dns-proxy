@@ -36,6 +36,7 @@ pub fn initialize_ebpf_client_manager() {
 
 pub async fn upstream_tls_handler(
    client_msg_rx: kanal::AsyncReceiver<UpstreamQuery>,
+   background_msg_rx: Option<kanal::AsyncReceiver<UpstreamQuery>>,
    upstream_dns_index: usize,
    listener_addr: std::sync::Arc<tokio::net::UdpSocket>,
 ) {
@@ -48,7 +49,7 @@ pub async fn upstream_tls_handler(
    let (mut shutdown_reader_tx, mut shutdown_reader_rx) = tokio::sync::oneshot::channel();
    let mut tls_stream = connect(&tls_connector, &upstream_dns).await;
    let (mut read_half, mut write_half) = tokio::io::split(tls_stream);
-   let mut write_handle = tokio::task::spawn(handle_writes(write_half, client_msg_rx, None, shutdown_writer_rx));
+   let mut write_handle = tokio::task::spawn(handle_writes(write_half, client_msg_rx, background_msg_rx.clone(), None, shutdown_writer_rx));
    let mut read_handle = tokio::task::spawn(handle_reads(read_half, upstream_dns_index, listener_addr.clone(), shutdown_reader_rx));
 
    loop {
@@ -78,7 +79,8 @@ pub async fn upstream_tls_handler(
       tls_stream = connect(&tls_connector, &upstream_dns).await;
 
       (read_half, write_half) = tokio::io::split(tls_stream);
-      write_handle = tokio::task::spawn(handle_writes(write_half, client_msg_rx, unsent_query, shutdown_writer_rx));
+      write_handle =
+         tokio::task::spawn(handle_writes(write_half, client_msg_rx, background_msg_rx.clone(), unsent_query, shutdown_writer_rx));
       read_handle = tokio::task::spawn(handle_reads(read_half, upstream_dns_index, listener_addr.clone(), shutdown_reader_rx));
    }
 }
@@ -86,6 +88,7 @@ pub async fn upstream_tls_handler(
 async fn handle_writes(
    mut write_half: tokio::io::WriteHalf<tokio_rustls::client::TlsStream<tokio::net::TcpStream>>,
    msg_rx: kanal::AsyncReceiver<UpstreamQuery>,
+   background_msg_rx: Option<kanal::AsyncReceiver<UpstreamQuery>>,
    unsent_previous_query_maybe: Option<UpstreamQuery>,
    mut shutdown_writer_rx: tokio::sync::oneshot::Receiver<bool>,
 ) -> (kanal::AsyncReceiver<UpstreamQuery>, Option<UpstreamQuery>) {
@@ -96,32 +99,72 @@ async fn handle_writes(
       }
    }
 
+   if background_msg_rx.is_none() {
+      return handle_foreground_writes(write_half, msg_rx, shutdown_writer_rx).await;
+   }
+   let background_msg_rx = background_msg_rx.unwrap();
+
    loop {
+      // Drain already-queued foreground work before considering background work.
+      if let Ok(Some(data)) = msg_rx.try_recv() {
+         if let Some(unsent_data) = write(&mut write_half, data).await {
+            return (msg_rx, Some(unsent_data));
+         }
+         continue;
+      }
+
       tokio::select! {
+         biased;
          shutdown_msg = &mut shutdown_writer_rx => {
             match shutdown_msg {
-               Ok(_) => {
-                  // Shutdown requested, return the queue
-                  return (msg_rx, None)
-               },
+               Ok(_) => return (msg_rx, None),
                Err(_) => panic!("Shutdown channel has been closed prematurely"),
             }
          },
          query_msg = msg_rx.recv() => {
             match query_msg {
                Ok(data) => match write(&mut write_half, data).await {
-                  Some(unsent_data) => {
-                     // Qeury failed
-                     return (msg_rx, Some(unsent_data))
-                  },
-                  None => {
-                     // Query completed successfully
-                     continue;
-                  }
+                  Some(unsent_data) => return (msg_rx, Some(unsent_data)),
+                  None => continue,
                },
                Err(_) => panic!("Query channel has been closed prematurely")
             }
-         }
+         },
+         query_msg = background_msg_rx.recv() => {
+            match query_msg {
+               Ok(data) => {
+                  // Background work is speculative and is never retried ahead of foreground work.
+                  let _ = write(&mut write_half, data).await;
+               },
+               Err(_) => continue,
+            }
+         },
+      }
+   }
+}
+
+async fn handle_foreground_writes(
+   mut write_half: tokio::io::WriteHalf<tokio_rustls::client::TlsStream<tokio::net::TcpStream>>,
+   msg_rx: kanal::AsyncReceiver<UpstreamQuery>,
+   mut shutdown_writer_rx: tokio::sync::oneshot::Receiver<bool>,
+) -> (kanal::AsyncReceiver<UpstreamQuery>, Option<UpstreamQuery>) {
+   loop {
+      tokio::select! {
+         shutdown_msg = &mut shutdown_writer_rx => {
+            match shutdown_msg {
+               Ok(_) => return (msg_rx, None),
+               Err(_) => panic!("Shutdown channel has been closed prematurely"),
+            }
+         },
+         query_msg = msg_rx.recv() => {
+            match query_msg {
+               Ok(data) => match write(&mut write_half, data).await {
+                  Some(unsent_data) => return (msg_rx, Some(unsent_data)),
+                  None => continue,
+               },
+               Err(_) => panic!("Query channel has been closed prematurely")
+            }
+         },
       }
    }
 }
@@ -235,10 +278,11 @@ async fn handle_reads(
 
          // Atomically remove the in-flight query so only the first usable response is processed.
          if let Some((in_flight, dns_response)) = crate::cache::in_flight_complete(cache_key, id, udp_segment_no_tcp_prefix) {
-            let saved_addr = in_flight.waiters[0].client_addr;
+            let saved_addr = in_flight.waiters.first().map(|waiter| waiter.client_addr);
 
             #[cfg(target_os = "linux")]
-            let (client_pid_comm, lookup_method) = if crate::statics::ARGS.client_ident {
+            let (client_pid_comm, lookup_method) = if crate::statics::ARGS.client_ident && saved_addr.is_some() {
+               let saved_addr = saved_addr.unwrap();
                // Try eBPF fast path first
                if !crate::statics::ARGS.force_netlink {
                   if let Some(manager) = EBPF_CLIENT_MANAGER.get() {
@@ -278,34 +322,40 @@ async fn handle_reads(
                (None, "")
             };
 
-            let mut answer = udp_segment_no_tcp_prefix.to_vec();
             let mut waiters = in_flight.waiters.into_iter();
-            let first_waiter = waiters.next().unwrap();
-            crate::dns::set_id_network_byte_order(first_waiter.client_id, &mut answer);
-            let wrote_len_maybe = listener_addr.send_to(&answer, first_waiter.client_addr).await;
+            if let Some(first_waiter) = waiters.next() {
+               let mut answer = udp_segment_no_tcp_prefix.to_vec();
+               crate::dns::set_id_network_byte_order(first_waiter.client_id, &mut answer);
+               let wrote_len_maybe = listener_addr.send_to(&answer, first_waiter.client_addr).await;
 
-            if let Ok(wrote_len) = wrote_len_maybe {
-               // Due to how rust implements IO for send_to, we will never have a len_written less than 0
-               if wrote_len == 0 {
-                  eprintln!("Failed to write response to the client. 0 bytes written at {}:{}", file!(), line!());
-               }
-            } else {
-               eprintln!("Failed to write response to the client with error: {} at {}:{}", wrote_len_maybe.unwrap_err(), file!(), line!());
-            }
-
-            if waiters.len() > 0 {
-               let listener_addr = listener_addr.clone();
-               tokio::task::spawn(async move {
-                  for waiter in waiters {
-                     crate::dns::set_id_network_byte_order(waiter.client_id, &mut answer);
-                     if let Err(err) = listener_addr.send_to(&answer, waiter.client_addr).await {
-                        eprintln!("Failed to write response to the client with error: {err}");
-                     }
+               if let Ok(wrote_len) = wrote_len_maybe {
+                  // Due to how rust implements IO for send_to, we will never have a len_written less than 0
+                  if wrote_len == 0 {
+                     eprintln!("Failed to write response to the client. 0 bytes written at {}:{}", file!(), line!());
                   }
-               });
+               } else {
+                  eprintln!(
+                     "Failed to write response to the client with error: {} at {}:{}",
+                     wrote_len_maybe.unwrap_err(),
+                     file!(),
+                     line!()
+                  );
+               }
+
+               if waiters.len() > 0 {
+                  let listener_addr = listener_addr.clone();
+                  tokio::task::spawn(async move {
+                     for waiter in waiters {
+                        crate::dns::set_id_network_byte_order(waiter.client_id, &mut answer);
+                        if let Err(err) = listener_addr.send_to(&answer, waiter.client_addr).await {
+                           eprintln!("Failed to write response to the client with error: {err}");
+                        }
+                     }
+                  });
+               }
             }
 
-            if !crate::statics::ARGS.daemon {
+            if !crate::statics::ARGS.daemon && saved_addr.is_some() {
                let (fastest_count, refused_count) = crate::stats::increment_fastest(upstream_dns_index);
                let mut output = format!(
                   "{:>4}ms -> {:<50} {:>7} {:>3} {:>7} {:>15} {:<7} {:>7}",
@@ -325,8 +375,8 @@ async fn handle_reads(
                      "{} - {} ({}:{}) [{}]",
                      output,
                      client_pid_comm.map_or("UNKNOWN".to_string(), |(pid, comm)| format!("{}/{}", pid, comm)),
-                     saved_addr.ip(),
-                     saved_addr.port(),
+                     saved_addr.unwrap().ip(),
+                     saved_addr.unwrap().port(),
                      lookup_method,
                   );
                }

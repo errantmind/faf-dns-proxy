@@ -24,6 +24,7 @@ mod dns;
 mod filter;
 mod network;
 mod proxy;
+mod refresh;
 mod statics;
 mod stats;
 mod tls;

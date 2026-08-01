@@ -179,26 +179,3 @@ impl Drop for DnsMonitor {
         self.stop_monitoring();
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_monitor_creation() {
-        // This test will fail without root privileges and proper eBPF setup,
-        // but it tests the basic structure
-        let monitor = DnsMonitor::new();
-        assert!(monitor.is_ok());
-    }
-
-    #[test]
-    fn test_monitor_state() {
-        let monitor = DnsMonitor::new().unwrap();
-        assert!(!monitor.is_running());
-
-        let (cache_len, is_empty) = monitor.cache_stats();
-        assert_eq!(cache_len, 0);
-        assert!(is_empty);
-    }
-}

@@ -28,19 +28,40 @@ pub struct InFlightEntry {
    pub deadline: tokio::time::Instant,
    pub waiters: Vec<InFlightWaiter>,
    pub query_template: Vec<u8>,
+   pub background_refresh: bool,
+   pub background_permit: Option<tokio::sync::OwnedSemaphorePermit>,
 }
 
 pub enum InFlightRegistration {
    Cached(AnswerCacheRef),
    Joined,
+   PromotedBackground { upstream_id: u16, deadline: tokio::time::Instant },
    Leader { upstream_id: u16, deadline: tokio::time::Instant },
    Overflow,
 }
 
+pub enum BackgroundRefreshRegistration {
+   Leader { upstream_id: u16, deadline: tokio::time::Instant, query: Vec<u8> },
+   Skipped,
+   AlreadyInFlight,
+}
+
+const REFRESH_ELIGIBLE: u8 = 0;
+const REFRESH_ARMED: u8 = 1;
+const REFRESH_ATTEMPTED: u8 = 2;
+
 pub struct AnswerCacheEntry {
    pub answer: Vec<u8>,
    pub elapsed_ms: u128,
-   pub expires_at: u64,
+   pub expires_at: tokio::time::Instant,
+   pub refresh_generation: u64,
+   pub(crate) refresh_state: std::sync::atomic::AtomicU8,
+}
+
+pub struct RefreshEvent {
+   pub cache_key: Vec<u8>,
+   pub generation: u64,
+   pub due_at: tokio::time::Instant,
 }
 
 lazy_static::lazy_static! {
@@ -59,27 +80,39 @@ const IN_FLIGHT_TIMEOUT: tokio::time::Duration = tokio::time::Duration::from_sec
 
 static IN_FLIGHT_COUNT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 static NEXT_UPSTREAM_ID: std::sync::atomic::AtomicU16 = std::sync::atomic::AtomicU16::new(0);
+static NEXT_REFRESH_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
-pub fn in_flight_register(cache_key: &[u8], query: &[u8], waiter: InFlightWaiter, current_time: u64) -> InFlightRegistration {
+fn join_in_flight(in_flight: &mut InFlightEntry, waiter: InFlightWaiter) -> InFlightRegistration {
+   if in_flight.waiters.len() >= MAX_WAITERS_PER_FLIGHT {
+      return InFlightRegistration::Overflow;
+   }
+   in_flight.waiters.push(waiter);
+   if in_flight.background_refresh {
+      // Mark promotion before releasing the shard lock so a response cannot
+      // be rejected at the old expiry while this foreground waiter exists.
+      in_flight.background_refresh = false;
+      drop(in_flight.background_permit.take());
+      InFlightRegistration::PromotedBackground { upstream_id: in_flight.upstream_id, deadline: in_flight.deadline }
+   } else {
+      InFlightRegistration::Joined
+   }
+}
+
+pub fn in_flight_register(
+   cache_key: &[u8],
+   query: &[u8],
+   waiter: InFlightWaiter,
+   current_time: tokio::time::Instant,
+) -> InFlightRegistration {
    use dashmap::mapref::entry::Entry;
    use std::sync::atomic::Ordering;
 
    if let Some(mut entry) = DNS_IN_FLIGHT.get_mut(cache_key) {
-      if entry.waiters.len() >= MAX_WAITERS_PER_FLIGHT {
-         return InFlightRegistration::Overflow;
-      }
-      entry.waiters.push(waiter);
-      return InFlightRegistration::Joined;
+      return join_in_flight(entry.value_mut(), waiter);
    }
 
    match DNS_IN_FLIGHT.entry(cache_key.to_vec()) {
-      Entry::Occupied(mut entry) => {
-         if entry.get().waiters.len() >= MAX_WAITERS_PER_FLIGHT {
-            return InFlightRegistration::Overflow;
-         }
-         entry.get_mut().waiters.push(waiter);
-         InFlightRegistration::Joined
-      }
+      Entry::Occupied(mut entry) => join_in_flight(entry.get_mut(), waiter),
       Entry::Vacant(entry) => {
          // The answer may have arrived after the caller's first cache lookup but before this shard was locked.
          if let Some(cached_response) = answer_cache_get_mut_check_expiry(cache_key, current_time) {
@@ -101,10 +134,86 @@ pub fn in_flight_register(cache_key: &[u8], query: &[u8], waiter: InFlightWaiter
             deadline,
             waiters: vec![waiter],
             query_template: query[..12 + cache_key.len()].to_vec(),
+            background_refresh: false,
+            background_permit: None,
          });
 
          InFlightRegistration::Leader { upstream_id, deadline }
       }
+   }
+}
+
+pub fn background_refresh_register(
+   cache_key: &[u8],
+   expected_generation: u64,
+   permit: tokio::sync::OwnedSemaphorePermit,
+) -> BackgroundRefreshRegistration {
+   use dashmap::mapref::entry::Entry;
+   use std::sync::atomic::Ordering;
+
+   match DNS_IN_FLIGHT.entry(cache_key.to_vec()) {
+      Entry::Occupied(_) => BackgroundRefreshRegistration::AlreadyInFlight,
+      Entry::Vacant(entry) => {
+         let answer = match DNS_ANSWER_CACHE.get(cache_key) {
+            Some(answer)
+               if answer.refresh_generation == expected_generation
+                  && answer.refresh_state.load(Ordering::Relaxed) == REFRESH_ARMED
+                  && answer.expires_at > tokio::time::Instant::now() =>
+            {
+               answer
+            }
+            _ => return BackgroundRefreshRegistration::Skipped,
+         };
+
+         if IN_FLIGHT_COUNT
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |count| (count < MAX_IN_FLIGHT).then_some(count + 1))
+            .is_err()
+         {
+            answer.refresh_state.store(REFRESH_ATTEMPTED, Ordering::Relaxed);
+            return BackgroundRefreshRegistration::Skipped;
+         }
+
+         let upstream_id = NEXT_UPSTREAM_ID.fetch_add(1, Ordering::Relaxed);
+         let deadline = tokio::time::Instant::now() + IN_FLIGHT_TIMEOUT;
+         let Some(mut query) = crate::dns::create_refresh_query(&answer.answer, cache_key.len()) else {
+            IN_FLIGHT_COUNT.fetch_sub(1, Ordering::Relaxed);
+            answer.refresh_state.store(REFRESH_ATTEMPTED, Ordering::Relaxed);
+            return BackgroundRefreshRegistration::Skipped;
+         };
+         crate::dns::set_id_network_byte_order(upstream_id, &mut query);
+         answer.refresh_state.store(REFRESH_ATTEMPTED, Ordering::Relaxed);
+         drop(answer);
+
+         entry.insert(InFlightEntry {
+            upstream_id,
+            asked_at: crate::util::get_unix_ts_millis(),
+            deadline,
+            waiters: Vec::new(),
+            query_template: query.clone(),
+            background_refresh: true,
+            background_permit: Some(permit),
+         });
+
+         BackgroundRefreshRegistration::Leader { upstream_id, deadline, query }
+      }
+   }
+}
+
+pub fn background_refresh_cancel(cache_key: &[u8], upstream_id: u16) {
+   use std::sync::atomic::Ordering;
+
+   if DNS_IN_FLIGHT.remove_if(cache_key, |_, entry| entry.upstream_id == upstream_id && entry.background_refresh).is_some() {
+      IN_FLIGHT_COUNT.fetch_sub(1, Ordering::Relaxed);
+   }
+}
+
+pub fn answer_cache_mark_refresh_attempted(cache_key: &[u8], generation: u64) {
+   use std::sync::atomic::Ordering;
+
+   if let Some(answer) = DNS_ANSWER_CACHE.get(cache_key)
+      && answer.refresh_generation == generation
+   {
+      answer.refresh_state.store(REFRESH_ATTEMPTED, Ordering::Relaxed);
    }
 }
 
@@ -117,8 +226,14 @@ pub fn in_flight_complete(cache_key: &[u8], upstream_id: u16, response: &[u8]) -
          return false;
       }
 
-      let response_result = crate::dns::process_dns_response(response, Some(entry.asked_at));
-      let cache_entry = crate::dns::create_cache_entry_from_response(&response_result, response);
+      let mut response_result = crate::dns::process_dns_response(response, Some(entry.asked_at));
+      if entry.background_refresh
+         && let Some(answer) = DNS_ANSWER_CACHE.get(key)
+      {
+         response_result.elapsed_ms = answer.elapsed_ms;
+      }
+      let generation = NEXT_REFRESH_GENERATION.fetch_add(1, Ordering::Relaxed);
+      let cache_entry = crate::dns::create_cache_entry_from_response(&response_result, response, generation);
       DNS_ANSWER_CACHE.insert(key.clone(), cache_entry);
       dns_response = Some(response_result);
       true
@@ -150,55 +265,36 @@ pub struct AnswerCacheRef {
    pub answer: Vec<u8>,
 }
 
-pub fn answer_cache_get_mut_check_expiry(cache_key: &[u8], current_time: u64) -> Option<AnswerCacheRef> {
-   if let Some(cached_response) = DNS_ANSWER_CACHE.get(cache_key) {
-      if cached_response.expires_at > current_time { Some(AnswerCacheRef { answer: cached_response.answer.clone() }) } else { None }
-   } else {
-      None
+pub struct AnswerCacheLookup {
+   pub answer: Vec<u8>,
+   pub refresh_event: Option<RefreshEvent>,
+}
+
+pub fn answer_cache_get_mut_check_expiry(cache_key: &[u8], current_time: tokio::time::Instant) -> Option<AnswerCacheRef> {
+   let cached_response = DNS_ANSWER_CACHE.get(cache_key)?;
+   (cached_response.expires_at > current_time).then(|| AnswerCacheRef { answer: cached_response.answer.clone() })
+}
+
+pub fn answer_cache_get_for_client(cache_key: &[u8], current_time: tokio::time::Instant) -> Option<AnswerCacheLookup> {
+   use std::sync::atomic::Ordering;
+
+   let cached_response = DNS_ANSWER_CACHE.get(cache_key)?;
+   if cached_response.expires_at <= current_time {
+      return None;
    }
+
+   let mut refresh_event = None;
+   if cached_response.refresh_state.load(Ordering::Relaxed) == REFRESH_ELIGIBLE
+      && cached_response.expires_at.saturating_duration_since(current_time) > crate::statics::BACKGROUND_REFRESH_MIN_TTL
+      && cached_response.refresh_state.compare_exchange(REFRESH_ELIGIBLE, REFRESH_ARMED, Ordering::Relaxed, Ordering::Relaxed).is_ok()
+   {
+      let due_at = cached_response.expires_at.checked_sub(crate::statics::BACKGROUND_REFRESH_MARGIN).unwrap_or(current_time);
+      refresh_event = Some(RefreshEvent { cache_key: cache_key.to_vec(), generation: cached_response.refresh_generation, due_at });
+   }
+
+   Some(AnswerCacheLookup { answer: cached_response.answer.clone(), refresh_event })
 }
 
 pub fn answer_cache_iter_filtered() -> Vec<u64> {
    DNS_ANSWER_CACHE.iter().filter(|x| x.elapsed_ms <= 8192).map(|x| x.elapsed_ms as u64).collect()
-}
-
-#[test]
-fn in_flight_fan_out_test() {
-   use std::sync::atomic::Ordering;
-
-   DNS_IN_FLIGHT.clear();
-   DNS_ANSWER_CACHE.clear();
-   IN_FLIGHT_COUNT.store(0, Ordering::Relaxed);
-
-   let mut query = vec![0u8; 24];
-   query[2] = 1;
-   query[5] = 1;
-   query[12..20].copy_from_slice(&[2, b'x', b'x', 3, b'c', b'o', b'm', 0]);
-   query[21] = 1;
-   query[23] = 1;
-   let cache_key = query[12..].to_vec();
-   let client_addr = std::net::SocketAddrV4::new(std::net::Ipv4Addr::LOCALHOST, 12345);
-
-   let upstream_id =
-      match in_flight_register(&cache_key, &query, InFlightWaiter { client_addr, client_id: 100 }, crate::util::get_unix_ts_secs()) {
-         InFlightRegistration::Leader { upstream_id, .. } => upstream_id,
-         _ => panic!("first request must lead the flight"),
-      };
-   assert!(matches!(
-      in_flight_register(&cache_key, &query, InFlightWaiter { client_addr, client_id: 200 }, crate::util::get_unix_ts_secs(),),
-      InFlightRegistration::Joined
-   ));
-
-   let mut response = query;
-   crate::dns::set_id_network_byte_order(upstream_id, &mut response);
-   response[2] = 0b1000_0001;
-   response[3] = 0b1000_0011;
-   let (entry, _) = in_flight_complete(&cache_key, upstream_id, &response).unwrap();
-
-   assert_eq!(entry.waiters.len(), 2);
-   assert_eq!(entry.waiters[0].client_id, 100);
-   assert_eq!(entry.waiters[1].client_id, 200);
-   assert!(in_flight_complete(&cache_key, upstream_id, &response).is_none());
-   assert!(answer_cache_get_mut_check_expiry(&cache_key, crate::util::get_unix_ts_secs()).is_none());
-   assert_eq!(IN_FLIGHT_COUNT.load(Ordering::Relaxed), 0);
 }

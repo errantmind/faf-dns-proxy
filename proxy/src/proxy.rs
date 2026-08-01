@@ -26,12 +26,23 @@ pub async fn go(port: u16) {
       };
 
       let mut tx_channels: Vec<kanal::AsyncSender<crate::network::UpstreamQuery>> = Vec::with_capacity(crate::statics::DNS_SERVERS.len());
+      let mut background_tx = None;
 
       for (dns_server_index, _) in crate::statics::DNS_SERVERS.iter().enumerate() {
          let (tx, rx) = kanal::bounded_async::<crate::network::UpstreamQuery>(8192);
-         tokio::task::spawn(crate::network::upstream_tls_handler(rx, dns_server_index, listener_socket.clone()));
+         let background_server_rx = if dns_server_index == crate::statics::BACKGROUND_REFRESH_UPSTREAM_INDEX {
+            let (server_tx, server_rx) = kanal::bounded_async::<crate::network::UpstreamQuery>(64);
+            background_tx = Some(server_tx);
+            Some(server_rx)
+         } else {
+            None
+         };
+         tokio::task::spawn(crate::network::upstream_tls_handler(rx, background_server_rx, dns_server_index, listener_socket.clone()));
          tx_channels.push(tx);
       }
+
+      let (refresh_tx, refresh_rx) = kanal::bounded_async::<crate::cache::RefreshEvent>(crate::statics::BACKGROUND_REFRESH_ACTIVE_LIMIT);
+      crate::refresh::start(refresh_rx, background_tx.unwrap());
 
       // Initialize eBPF client identification before starting main loop
       #[cfg(target_os = "linux")]
@@ -47,7 +58,9 @@ pub async fn go(port: u16) {
                   let mut response = entry.query_template;
                   crate::dns::create_servfail_response(&mut response);
                   let mut waiters = entry.waiters.into_iter();
-                  let first_waiter = waiters.next().unwrap();
+                  let Some(first_waiter) = waiters.next() else {
+                     continue;
+                  };
                   crate::dns::set_id_network_byte_order(first_waiter.client_id, &mut response);
                   if let Err(err) = listener_socket.send_to(&response, first_waiter.client_addr).await {
                      eprintln!("Failed to send timed out response to the client with error: {err}");
@@ -114,10 +127,16 @@ pub async fn go(port: u16) {
 
          let id = crate::dns::get_id_network_byte_order(udp_segment.as_ptr(), udp_segment.len());
          let cache_key = crate::dns::get_query_unique_id(udp_segment.as_ptr(), udp_segment.len());
-         let current_time = crate::util::get_unix_ts_secs();
+         let current_time = tokio::time::Instant::now();
 
-         // First check the ANSWER cache and respond immediately if we already have an answer to the query
-         if let Some(cached_response) = crate::cache::answer_cache_get_mut_check_expiry(cache_key, current_time) {
+         // First check the ANSWER cache and respond immediately if we already have an answer to the query.
+         // Scheduling is nonblocking; a full refresh queue never delays the cache-hit path.
+         if let Some(cached_response) = crate::cache::answer_cache_get_for_client(cache_key, current_time) {
+            if let Some(refresh_event) = cached_response.refresh_event {
+               if refresh_tx.try_send(refresh_event) != Ok(true) {
+                  // The entry remains armed and this generation will simply receive no speculative refresh.
+               }
+            }
             let mut answer = cached_response.answer;
             crate::dns::set_id_network_byte_order(id, &mut answer);
             let wrote_len_maybe = listener_socket.send_to(&answer, &client_addr).await;
@@ -183,6 +202,16 @@ pub async fn go(port: u16) {
                }
             }
             crate::cache::InFlightRegistration::Joined => (),
+            crate::cache::InFlightRegistration::PromotedBackground { upstream_id, deadline } => {
+               crate::dns::set_id_network_byte_order(upstream_id, udp_segment);
+               unsafe { *(query_buf.as_mut_ptr() as *mut u16) = (read_bytes as u16).to_be() };
+               let query = crate::network::UpstreamQuery { data: query_buf[0..read_bytes + 2].to_vec(), deadline };
+               for (upstream_index, tx) in tx_channels.iter().enumerate() {
+                  if upstream_index != crate::statics::BACKGROUND_REFRESH_UPSTREAM_INDEX && tx.try_send(query.clone()) == Ok(true) {
+                     // The existing preferred-upstream refresh is promoted to the normal foreground shotgun.
+                  }
+               }
+            }
             crate::cache::InFlightRegistration::Overflow => {
                crate::dns::create_servfail_response(udp_segment);
                if let Err(err) = listener_socket.send_to(udp_segment, client_addr_ipv4).await {

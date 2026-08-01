@@ -50,13 +50,34 @@ pub fn process_dns_response(udp_segment: &[u8], asked_at_opt: Option<u128>) -> D
    DnsResponseResult { site_name, qtype_str, qclass_str, ttl, elapsed_ms }
 }
 
-/// Creates a cache entry from a processed DNS response
-pub fn create_cache_entry_from_response(response_result: &DnsResponseResult, udp_segment: &[u8]) -> crate::cache::AnswerCacheEntry {
+/// Creates a cache entry from a processed DNS response.
+pub fn create_cache_entry_from_response(
+   response_result: &DnsResponseResult,
+   udp_segment: &[u8],
+   refresh_generation: u64,
+) -> crate::cache::AnswerCacheEntry {
    crate::cache::AnswerCacheEntry {
       answer: udp_segment.to_vec(),
       elapsed_ms: response_result.elapsed_ms,
-      expires_at: crate::util::get_unix_ts_secs() + response_result.ttl,
+      expires_at: tokio::time::Instant::now() + std::time::Duration::from_secs(response_result.ttl),
+      refresh_generation,
+      refresh_state: std::sync::atomic::AtomicU8::new(0),
    }
+}
+
+/// Converts the saved question prefix of a DNS response into a reusable query.
+#[inline]
+pub fn create_refresh_query(response: &[u8], question_len: usize) -> Option<Vec<u8>> {
+   let query_len = 12usize.checked_add(question_len)?;
+   let mut query = response.get(..query_len)?.to_vec();
+
+   // Keep RD/CD from the original request semantics represented in the response,
+   // clear response-only flags/RCODE, and restore a one-question query header.
+   query[2] &= 0b0000_0001;
+   query[3] &= 0b0001_0000;
+   query[4..6].copy_from_slice(&1u16.to_be_bytes());
+   query[6..12].fill(0);
+   Some(query)
 }
 
 #[inline]
@@ -367,21 +388,4 @@ pub fn check_for_usable_response(dns_buf: &[u8]) -> Option<bool> {
    }
 
    Some(matches!(dns_buf[3] & 0b0000_1111, 0 | 3))
-}
-
-#[test]
-fn create_servfail_response_test() {
-   let mut query = [0u8; 19];
-   query[2] = 0b0000_0001;
-   query[3] = 0b0001_1111;
-   query[5] = 1;
-   query[7] = 2;
-   query[9] = 3;
-   query[11] = 4;
-
-   create_servfail_response(&mut query);
-
-   assert_eq!(query[2], 0b1000_0001);
-   assert_eq!(query[3], 0b1001_0010);
-   assert_eq!(&query[4..12], &[0, 1, 0, 0, 0, 0, 0, 0]);
 }

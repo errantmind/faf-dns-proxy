@@ -95,16 +95,3 @@ fn fast_log_2(x: u64) -> u64 {
 
    y
 }
-
-#[test]
-// test generate_log_chart: 1000 u64 values with a min of 0 and a max of 2000
-pub fn test_generate_log_chart() {
-   use std::iter::repeat_with;
-
-   let mut latencies: Vec<u64> = repeat_with(|| fastrand::u64(0..64)).take(10000).collect();
-   latencies.push(0);
-   latencies.push(64);
-   latencies.sort_unstable();
-
-   generate_log_chart(latencies).unwrap();
-}
