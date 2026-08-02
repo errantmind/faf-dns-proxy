@@ -3,11 +3,11 @@
 //! This library provides real-time monitoring of DNS traffic using eBPF kernel probes.
 //! It can track DNS requests with process information, network details, and latency measurements.
 
-pub mod cache;
-pub mod ebpf;
-pub mod error;
-pub mod monitor;
-pub mod types;
+mod cache;
+mod ebpf;
+mod error;
+mod monitor;
+mod types;
 
 // Re-export main public types
 pub use error::{Error, Result};

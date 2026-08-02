@@ -25,6 +25,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #[cfg(feature = "ebpf-client-ident")]
 use faf_dns_intercept::DnsMonitor;
 use std::net::SocketAddrV4;
+#[cfg(feature = "ebpf-client-ident")]
 use std::sync::Mutex;
 
 /// High-performance eBPF-based client identification manager
@@ -40,8 +41,6 @@ pub struct EbpfClientManager {
 pub struct ClientInfo {
    pub pid: u32,
    pub process_name: String,
-   pub process_tree: String,
-   pub latency_us: u64,
    pub lookup_method: &'static str,
 }
 
@@ -90,50 +89,19 @@ impl EbpfClientManager {
 
    /// Look up client information for a given source address using eBPF fast path
    /// Returns None if eBPF is not available or no information was found
-   pub fn lookup_client_info(&self, source_addr: SocketAddrV4) -> Option<ClientInfo> {
+   pub fn lookup_client_info(&self, _source_addr: SocketAddrV4) -> Option<ClientInfo> {
       #[cfg(feature = "ebpf-client-ident")]
       {
          if let Ok(guard) = self.monitor.lock() {
             if let Some(ref monitor) = *guard {
-               if let Some(dns_info) = monitor.lookup_request_details(source_addr) {
-                  return Some(ClientInfo {
-                     pid: dns_info.pid,
-                     process_name: dns_info.process_name.clone(),
-                     process_tree: dns_info.process_tree_string(),
-                     latency_us: dns_info.latency_us,
-                     lookup_method: "EBPF",
-                  });
+               if let Some(dns_info) = monitor.lookup_request_details(_source_addr) {
+                  return Some(ClientInfo { pid: dns_info.pid, process_name: dns_info.process_name.clone(), lookup_method: "EBPF" });
                }
             }
          }
       }
 
       None
-   }
-
-   /// Check if eBPF monitoring is active
-   pub fn is_active(&self) -> bool {
-      #[cfg(feature = "ebpf-client-ident")]
-      {
-         if let Ok(guard) = self.monitor.lock() { guard.is_some() } else { false }
-      }
-
-      #[cfg(not(feature = "ebpf-client-ident"))]
-      false
-   }
-
-   /// Get statistics about the eBPF monitoring system
-   pub fn get_stats(&self) -> (usize, bool) {
-      #[cfg(feature = "ebpf-client-ident")]
-      {
-         if let Ok(guard) = self.monitor.lock() {
-            if let Some(ref monitor) = *guard {
-               return monitor.cache_stats();
-            }
-         }
-      }
-
-      (0, true)
    }
 }
 

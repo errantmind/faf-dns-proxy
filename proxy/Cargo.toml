@@ -9,7 +9,7 @@ edition = "2024"
 
 [features]
 default = []
-ebpf-client-ident = ["faf-dns-intercept"]
+ebpf-client-ident = ["dep:faf-dns-intercept"]
 
 [dependencies]
 # error handling
@@ -29,9 +29,6 @@ kanal = "0.1.1"
 tokio = { workspace = true }
 tokio-rustls = { version = "0.25.0", features = ["default", "early-data"] }
 
-# walk directories, enumerating files
-walkdir = "2.5.0"
-
 # easy serialization and deserialization
 serde = { version = "1.0.219", default-features = false, features = ["derive"] }
 
@@ -50,18 +47,8 @@ chrono = "0.4.41"
 # fast hashmap hasher
 rustc-hash = "2.1.3"
 
-# fast hash helper
-rapidhash = "4.5.1"
-
-# faster hasher for keys that are particular primitives
-nohash-hasher = "0.2.0"
-
 # charts to visualize distribution of latency
 charming = { version = "0.3.1", default-features = true }
-
-[build-dependencies]
-anyhow = { workspace = true }
-which = "4.4.2"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # get pid of sending process (if local machine)
@@ -69,7 +56,5 @@ netlink-packet-core = "0.7.0"
 netlink-packet-sock-diag = "0.4.2"
 netlink-sys = "0.8.5"
 procfs = "0.16.0"
-# system calls
-libc = { workspace = true }
 # high-performance DNS client identification via eBPF (optional)
 faf-dns-intercept = { path = "../intercept", optional = true }

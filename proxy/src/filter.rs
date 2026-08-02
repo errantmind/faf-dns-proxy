@@ -28,13 +28,6 @@ lazy_static::lazy_static! {
    static ref BLOCKLISTS: tokio::sync::Mutex<Vec<crate::blocklist::BlocklistFile>> = tokio::sync::Mutex::new(Vec::new());
 }
 
-/// Result of domain filtering operation
-pub struct FilterResult {
-   pub is_blocked: bool,
-   pub question: String,
-   pub primary_domain: String,
-}
-
 /// Initialize the domain filtering system
 pub async fn initialize_blocklists() {
    if crate::statics::ARGS.blocklists {
@@ -44,7 +37,7 @@ pub async fn initialize_blocklists() {
 }
 
 /// Extract domain information from DNS query for filtering
-pub fn extract_domain_info(udp_segment: &[u8]) -> (String, String) {
+fn extract_domain_info(udp_segment: &[u8]) -> (String, String) {
    let question = crate::dns::get_question_as_string(udp_segment.as_ptr(), udp_segment.len());
 
    // Extract primary domain for blocklist matching
@@ -67,11 +60,7 @@ fn is_ipv6_query(udp_segment: &[u8]) -> bool {
 }
 
 /// Check if a domain is blocked and handle the response
-pub async fn process_domain_filtering(
-   udp_segment: &mut [u8],
-   listener_socket: &UdpSocket,
-   client_addr: &std::net::SocketAddr,
-) -> FilterResult {
+pub async fn process_domain_filtering(udp_segment: &mut [u8], listener_socket: &UdpSocket, client_addr: &std::net::SocketAddr) -> bool {
    let (question, primary_domain) = extract_domain_info(udp_segment);
 
    // Check IPv6 blocking first (independent of blocklists)
@@ -95,12 +84,12 @@ pub async fn process_domain_filtering(
          );
       }
 
-      return FilterResult { is_blocked: true, question, primary_domain };
+      return true;
    }
 
    // Check domain blocklists (only if --blocklists is enabled)
    if !crate::statics::ARGS.blocklists {
-      return FilterResult { is_blocked: false, question, primary_domain };
+      return false;
    }
 
    // Check if domain is blocked
@@ -134,12 +123,12 @@ pub async fn process_domain_filtering(
       }
    }
 
-   FilterResult { is_blocked: domain_is_blocked, question, primary_domain }
+   domain_is_blocked
 }
 
 /// Create a blocked response (NXDOMAIN) from a DNS query
 #[inline]
-pub fn create_blocked_response(dns_buf: &mut [u8]) -> Option<()> {
+fn create_blocked_response(dns_buf: &mut [u8]) -> Option<()> {
    if dns_buf.len() < 4 {
       return None;
    }
@@ -154,19 +143,4 @@ pub fn create_blocked_response(dns_buf: &mut [u8]) -> Option<()> {
    dns_buf[3] |= 0b0000_0011;
 
    Some(())
-}
-
-/// Check if blocklists are enabled
-pub fn is_filtering_enabled() -> bool {
-   crate::statics::ARGS.blocklists
-}
-
-/// Get the number of loaded blocklists (for diagnostics)
-pub async fn get_blocklist_count() -> usize {
-   BLOCKLISTS.lock().await.len()
-}
-
-/// Get the total number of blocked domains (for diagnostics)
-pub async fn get_blocked_domain_count() -> usize {
-   BLOCKLISTS.lock().await.iter().map(|blocklist| blocklist.blocked_domains.len()).sum()
 }

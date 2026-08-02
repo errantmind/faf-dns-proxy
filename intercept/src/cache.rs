@@ -46,13 +46,6 @@ impl DnsRequestCache {
         }
     }
 
-    /// Create a new cache with default settings
-    ///
-    /// Default: 10,000 entries, 30 second TTL
-    pub fn with_defaults() -> Self {
-        Self::new(10_000, Duration::from_secs(30))
-    }
-
     /// Insert a DNS request into the cache
     pub fn insert(&self, info: DnsRequestInfo) {
         let source_addr = info.source_socket_addr();
@@ -94,18 +87,6 @@ impl DnsRequestCache {
     pub fn is_empty(&self) -> bool {
         let inner = self.inner.lock().unwrap();
         inner.entries.is_empty()
-    }
-
-    /// Clear all entries from the cache
-    pub fn clear(&self) {
-        let mut inner = self.inner.lock().unwrap();
-        inner.entries.clear();
-    }
-
-    /// Manually trigger cleanup of expired entries
-    pub fn cleanup(&self) {
-        let mut inner = self.inner.lock().unwrap();
-        inner.cleanup_expired();
     }
 }
 

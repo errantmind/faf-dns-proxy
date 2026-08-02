@@ -184,18 +184,3 @@ pub fn increment_refused(dns_server_index: usize) -> (u64, u64) {
    let fastest = SERVER_STATS[dns_server_index].fastest_count.load(Ordering::Relaxed);
    (fastest, refused + 1)
 }
-
-/// Get current stats for a DNS server
-/// Returns (fastest_count, refused_count)
-#[inline]
-pub fn get_stats(dns_server_index: usize) -> (u64, u64) {
-   let fastest = SERVER_STATS[dns_server_index].fastest_count.load(Ordering::Relaxed);
-   let refused = SERVER_STATS[dns_server_index].refused_count.load(Ordering::Relaxed);
-   (fastest, refused)
-}
-
-/// Display statistics for a DNS server
-pub fn display_server_stats(dns_server_index: usize) -> String {
-   let (fastest, _) = get_stats(dns_server_index);
-   format!("{}\n  fastest: {}\n", DNS_SERVERS[dns_server_index].socket_addr.ip(), fastest)
-}

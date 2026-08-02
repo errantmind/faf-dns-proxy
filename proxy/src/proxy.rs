@@ -118,8 +118,7 @@ pub async fn go(port: u16) {
          let udp_segment = &mut query_buf[2..read_bytes + 2];
 
          // Process domain filtering
-         let filter_result = crate::filter::process_domain_filtering(udp_segment, &listener_socket, &client_addr).await;
-         if filter_result.is_blocked {
+         if crate::filter::process_domain_filtering(udp_segment, &listener_socket, &client_addr).await {
             continue;
          }
 

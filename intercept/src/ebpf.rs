@@ -5,7 +5,7 @@ use libbpf_rs::{MapCore, ObjectBuilder, RingBufferBuilder};
 use std::path::Path;
 use std::process::Command;
 
-static UDP_INTERCEPT_OBJ: &[u8] = include_bytes!("udp_intercept.o");
+static UDP_INTERCEPT_OBJ: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/udp_intercept.o"));
 
 /// eBPF program manager
 pub struct EbpfManager {
@@ -73,11 +73,6 @@ impl EbpfManager {
         let ringbuf = builder.build()?;
 
         Ok(ringbuf)
-    }
-
-    /// Check if the eBPF programs are loaded and attached
-    pub fn is_loaded(&self) -> bool {
-        self.object.is_some()
     }
 }
 
