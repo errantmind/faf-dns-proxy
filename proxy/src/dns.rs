@@ -55,13 +55,17 @@ pub fn create_cache_entry_from_response(
    response_result: &DnsResponseResult,
    udp_segment: &[u8],
    refresh_generation: u64,
+   previous_expires_at: Option<tokio::time::Instant>,
+   refresh_lease_until_ms: u64,
 ) -> crate::cache::AnswerCacheEntry {
    crate::cache::AnswerCacheEntry {
       answer: udp_segment.to_vec(),
       elapsed_ms: response_result.elapsed_ms,
       expires_at: tokio::time::Instant::now() + std::time::Duration::from_secs(response_result.ttl),
+      previous_expires_at,
       refresh_generation,
       refresh_state: std::sync::atomic::AtomicU8::new(0),
+      refresh_lease_until_ms: std::sync::atomic::AtomicU64::new(refresh_lease_until_ms),
    }
 }
 

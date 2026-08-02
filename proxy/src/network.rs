@@ -277,7 +277,12 @@ async fn handle_reads(
          let cache_key = crate::dns::get_query_unique_id(udp_segment_no_tcp_prefix.as_ptr(), udp_segment_no_tcp_prefix.len());
 
          // Atomically remove the in-flight query so only the first usable response is processed.
-         if let Some((in_flight, dns_response)) = crate::cache::in_flight_complete(cache_key, id, udp_segment_no_tcp_prefix) {
+         if let Some(completion) = crate::cache::in_flight_complete(cache_key, id, udp_segment_no_tcp_prefix) {
+            if let Some(refresh_event) = completion.refresh_event {
+               crate::refresh::schedule(refresh_event);
+            }
+            let in_flight = completion.entry;
+            let dns_response = completion.dns_response;
             let saved_addr = in_flight.waiters.first().map(|waiter| waiter.client_addr);
 
             #[cfg(target_os = "linux")]

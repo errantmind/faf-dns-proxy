@@ -26,23 +26,18 @@ pub async fn go(port: u16) {
       };
 
       let mut tx_channels: Vec<kanal::AsyncSender<crate::network::UpstreamQuery>> = Vec::with_capacity(crate::statics::DNS_SERVERS.len());
-      let mut background_tx = None;
+      let mut background_tx_channels = Vec::with_capacity(crate::statics::DNS_SERVERS.len());
 
       for (dns_server_index, _) in crate::statics::DNS_SERVERS.iter().enumerate() {
          let (tx, rx) = kanal::bounded_async::<crate::network::UpstreamQuery>(8192);
-         let background_server_rx = if dns_server_index == crate::statics::BACKGROUND_REFRESH_UPSTREAM_INDEX {
-            let (server_tx, server_rx) = kanal::bounded_async::<crate::network::UpstreamQuery>(64);
-            background_tx = Some(server_tx);
-            Some(server_rx)
-         } else {
-            None
-         };
-         tokio::task::spawn(crate::network::upstream_tls_handler(rx, background_server_rx, dns_server_index, listener_socket.clone()));
+         let (background_tx, background_rx) = kanal::bounded_async::<crate::network::UpstreamQuery>(64);
+         tokio::task::spawn(crate::network::upstream_tls_handler(rx, Some(background_rx), dns_server_index, listener_socket.clone()));
          tx_channels.push(tx);
+         background_tx_channels.push(background_tx);
       }
 
       let (refresh_tx, refresh_rx) = kanal::bounded_async::<crate::cache::RefreshEvent>(crate::statics::BACKGROUND_REFRESH_ACTIVE_LIMIT);
-      crate::refresh::start(refresh_rx, background_tx.unwrap());
+      crate::refresh::start(refresh_tx, refresh_rx, background_tx_channels);
 
       // Initialize eBPF client identification before starting main loop
       #[cfg(target_os = "linux")]
@@ -54,7 +49,11 @@ pub async fn go(port: u16) {
             let mut interval = tokio::time::interval(tokio::time::Duration::from_millis(100));
             loop {
                interval.tick().await;
-               for entry in crate::cache::in_flight_take_expired(tokio::time::Instant::now()) {
+               for expired in crate::cache::in_flight_take_expired(tokio::time::Instant::now()) {
+                  if let Some(refresh_event) = expired.refresh_event {
+                     crate::refresh::schedule(refresh_event);
+                  }
+                  let entry = expired.entry;
                   let mut response = entry.query_template;
                   crate::dns::create_servfail_response(&mut response);
                   let mut waiters = entry.waiters.into_iter();
@@ -85,8 +84,6 @@ pub async fn go(port: u16) {
       // Reserve 2 bytes for the DNS-over-TCP length prefix.
       let mut query_buf = vec![0; crate::dns::MAX_DNS_MESSAGE_SIZE + 2];
 
-      let mut cache_hits: u64 = 0;
-
       // Print header for DNS output when not in daemon mode
       if !crate::statics::ARGS.daemon {
          #[cfg(target_os = "linux")]
@@ -105,6 +102,7 @@ pub async fn go(port: u16) {
 
          println!("{}", header);
          println!("{}", "=".repeat(header.len()));
+         crate::stats::start_reporter();
       }
 
       loop {
@@ -133,10 +131,9 @@ pub async fn go(port: u16) {
          // Scheduling is nonblocking; a full refresh queue never delays the cache-hit path.
          if let Some(cached_response) = crate::cache::answer_cache_get_for_client(cache_key, current_time) {
             if let Some(refresh_event) = cached_response.refresh_event {
-               if refresh_tx.try_send(refresh_event) != Ok(true) {
-                  // The entry remains armed and this generation will simply receive no speculative refresh.
-               }
+               crate::refresh::schedule(refresh_event);
             }
+            let cache_hits = crate::stats::increment_cache_hit();
             let mut answer = cached_response.answer;
             crate::dns::set_id_network_byte_order(id, &mut answer);
             let wrote_len_maybe = listener_socket.send_to(&answer, &client_addr).await;
@@ -157,28 +154,17 @@ pub async fn go(port: u16) {
                continue;
             }
 
-            if !crate::statics::ARGS.daemon {
-               cache_hits += 1;
-               if cache_hits >= 16 && crate::util::is_power_of_2(cache_hits) {
-                  tokio::task::spawn(async move {
-                     // Filter out values greater than 8192ms as they are likely bogus, possibly caused by a drop in internet
-                     // connectivity mid-query, or packet loss.
-                     let mut elapsed_ms_vec: Vec<u64> = crate::cache::answer_cache_iter_filtered();
-                     if elapsed_ms_vec.len() > 25 {
-                        elapsed_ms_vec.sort_unstable();
-                        let median = elapsed_ms_vec[elapsed_ms_vec.len() / 2];
-                        println!("cache hits: {cache_hits}, median uncached query time: {median}ms, lowest: {}ms", elapsed_ms_vec[0]);
-                        if crate::statics::ARGS.charts {
-                           match crate::chart::generate_log_chart(elapsed_ms_vec) {
-                              Ok(_) => (),
-                              Err(err) => eprintln!("Failed to generate chart with error: {}", err),
-                           }
-                        }
+            if !crate::statics::ARGS.daemon && crate::statics::ARGS.charts && cache_hits >= 16 && crate::util::is_power_of_2(cache_hits) {
+               tokio::task::spawn(async move {
+                  let mut elapsed_ms_vec = crate::cache::answer_cache_latencies();
+                  if elapsed_ms_vec.len() > 25 {
+                     elapsed_ms_vec.sort_unstable();
+                     if let Err(err) = crate::chart::generate_log_chart(elapsed_ms_vec) {
+                        eprintln!("Failed to generate chart with error: {err}");
                      }
-                  });
-               }
+                  }
+               });
             }
-
             continue;
          }
 
@@ -195,30 +181,31 @@ pub async fn go(port: u16) {
 
          match registration {
             crate::cache::InFlightRegistration::Cached(cached_response) => {
+               crate::stats::increment_cache_hit();
+               if let Some(refresh_event) = cached_response.refresh_event {
+                  crate::refresh::schedule(refresh_event);
+               }
                let mut answer = cached_response.answer;
                crate::dns::set_id_network_byte_order(id, &mut answer);
                if let Err(err) = listener_socket.send_to(&answer, client_addr_ipv4).await {
                   eprintln!("Failed to write cached response to the client with error: {err}");
                }
             }
-            crate::cache::InFlightRegistration::Joined => (),
-            crate::cache::InFlightRegistration::PromotedBackground { upstream_id, deadline } => {
-               crate::dns::set_id_network_byte_order(upstream_id, udp_segment);
-               unsafe { *(query_buf.as_mut_ptr() as *mut u16) = (read_bytes as u16).to_be() };
-               let query = crate::network::UpstreamQuery { data: query_buf[0..read_bytes + 2].to_vec(), deadline };
-               for (upstream_index, tx) in tx_channels.iter().enumerate() {
-                  if upstream_index != crate::statics::BACKGROUND_REFRESH_UPSTREAM_INDEX && tx.try_send(query.clone()) == Ok(true) {
-                     // The existing preferred-upstream refresh is promoted to the normal foreground shotgun.
-                  }
-               }
+            crate::cache::InFlightRegistration::Joined => {
+               crate::stats::increment_cache_miss();
+            }
+            crate::cache::InFlightRegistration::PromotedBackground => {
+               crate::stats::increment_cache_miss();
             }
             crate::cache::InFlightRegistration::Overflow => {
+               crate::stats::increment_cache_miss();
                crate::dns::create_servfail_response(udp_segment);
                if let Err(err) = listener_socket.send_to(udp_segment, client_addr_ipv4).await {
                   eprintln!("Failed to send overloaded response to the client with error: {err}");
                }
             }
             crate::cache::InFlightRegistration::Leader { upstream_id, deadline } => {
+               crate::stats::increment_cache_miss();
                crate::dns::set_id_network_byte_order(upstream_id, udp_segment);
 
                // Write both bytes at once after converting to Big Endian

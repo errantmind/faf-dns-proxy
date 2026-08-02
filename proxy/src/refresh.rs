@@ -17,7 +17,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
 use std::cmp::Ordering;
-use std::collections::{BinaryHeap, HashSet};
+use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 
 #[derive(Eq)]
@@ -29,7 +29,7 @@ struct ScheduledRefresh {
 
 impl Ord for ScheduledRefresh {
    fn cmp(&self, other: &Self) -> Ordering {
-      other.due_at.cmp(&self.due_at).then_with(|| other.generation.cmp(&self.generation))
+      self.due_at.cmp(&other.due_at).then_with(|| self.generation.cmp(&other.generation)).then_with(|| self.cache_key.cmp(&other.cache_key))
    }
 }
 
@@ -45,59 +45,40 @@ impl PartialEq for ScheduledRefresh {
    }
 }
 
-struct SendRate {
-   tokens: u32,
-   last_refill: tokio::time::Instant,
-}
+type ArmedRefreshes = HashMap<Vec<u8>, (tokio::time::Instant, u64), rustc_hash::FxBuildHasher>;
 
-impl SendRate {
-   fn new(now: tokio::time::Instant) -> Self {
-      Self { tokens: crate::statics::BACKGROUND_REFRESH_BURST, last_refill: now }
-   }
-
-   fn take(&mut self, now: tokio::time::Instant) -> bool {
-      let elapsed_ns = now.duration_since(self.last_refill).as_nanos();
-      let added = elapsed_ns * crate::statics::BACKGROUND_REFRESH_RATE_PER_SECOND as u128 / 1_000_000_000;
-      if added > 0 {
-         self.tokens = self.tokens.saturating_add(added.min(u32::MAX as u128) as u32).min(crate::statics::BACKGROUND_REFRESH_BURST);
-         let used_ns = added * 1_000_000_000 / crate::statics::BACKGROUND_REFRESH_RATE_PER_SECOND as u128;
-         self.last_refill += std::time::Duration::from_nanos(used_ns.min(u64::MAX as u128) as u64);
-      }
-
-      if self.tokens == 0 {
-         false
-      } else {
-         self.tokens -= 1;
-         true
-      }
-   }
-}
-
-type ArmedRefreshes = HashSet<Vec<u8>, rustc_hash::FxBuildHasher>;
+static REFRESH_TX: once_cell::sync::OnceCell<kanal::AsyncSender<crate::cache::RefreshEvent>> = once_cell::sync::OnceCell::new();
 
 pub fn start(
+   refresh_tx: kanal::AsyncSender<crate::cache::RefreshEvent>,
    refresh_rx: kanal::AsyncReceiver<crate::cache::RefreshEvent>,
-   background_tx: kanal::AsyncSender<crate::network::UpstreamQuery>,
+   background_tx_channels: Vec<kanal::AsyncSender<crate::network::UpstreamQuery>>,
 ) {
-   tokio::task::spawn(run(refresh_rx, background_tx));
+   REFRESH_TX.set(refresh_tx).ok();
+   tokio::task::spawn(run(refresh_rx, background_tx_channels));
+}
+
+pub fn schedule(event: crate::cache::RefreshEvent) {
+   if REFRESH_TX.get().is_none_or(|tx| tx.try_send(event.clone()) != Ok(true)) {
+      crate::cache::answer_cache_disarm_refresh(&event.cache_key, event.generation);
+      crate::stats::increment_refresh_skipped();
+   }
 }
 
 async fn run(
    refresh_rx: kanal::AsyncReceiver<crate::cache::RefreshEvent>,
-   background_tx: kanal::AsyncSender<crate::network::UpstreamQuery>,
+   background_tx_channels: Vec<kanal::AsyncSender<crate::network::UpstreamQuery>>,
 ) {
    let semaphore = Arc::new(tokio::sync::Semaphore::new(crate::statics::BACKGROUND_REFRESH_CONCURRENCY));
-   let mut schedule = BinaryHeap::with_capacity(crate::statics::BACKGROUND_REFRESH_ACTIVE_LIMIT);
+   let mut schedule = BTreeSet::new();
    let mut armed =
       ArmedRefreshes::with_capacity_and_hasher(crate::statics::BACKGROUND_REFRESH_ACTIVE_LIMIT, rustc_hash::FxBuildHasher::default());
-   let mut rate = SendRate::new(tokio::time::Instant::now());
-
    loop {
       while let Ok(Some(event)) = refresh_rx.try_recv() {
          admit(event, &mut schedule, &mut armed);
       }
 
-      let Some(next_due) = schedule.peek().map(|event| event.due_at) else {
+      let Some(next_due) = schedule.first().map(|event| event.due_at) else {
          match refresh_rx.recv().await {
             Ok(event) => admit(event, &mut schedule, &mut armed),
             Err(_) => return,
@@ -112,58 +93,78 @@ async fn run(
          },
          _ = tokio::time::sleep_until(next_due) => {
             let now = tokio::time::Instant::now();
-            while schedule.peek().is_some_and(|event| event.due_at <= now) {
-               let event = schedule.pop().unwrap();
+            while schedule.first().is_some_and(|event| event.due_at <= now) {
+               let event = schedule.pop_first().unwrap();
                armed.remove(&event.cache_key);
-               dispatch(event, now, &semaphore, &mut rate, &background_tx);
+               dispatch(event, &semaphore, &background_tx_channels, &mut schedule, &mut armed);
             }
          }
       }
    }
 }
 
-fn admit(event: crate::cache::RefreshEvent, schedule: &mut BinaryHeap<ScheduledRefresh>, armed: &mut ArmedRefreshes) {
-   if schedule.len() >= crate::statics::BACKGROUND_REFRESH_ACTIVE_LIMIT {
-      crate::cache::answer_cache_mark_refresh_attempted(&event.cache_key, event.generation);
+fn admit(event: crate::cache::RefreshEvent, schedule: &mut BTreeSet<ScheduledRefresh>, armed: &mut ArmedRefreshes) {
+   if let Some((old_due_at, old_generation)) = armed.get(&event.cache_key).copied() {
+      if old_generation > event.generation {
+         return;
+      }
+      schedule.remove(&ScheduledRefresh { cache_key: event.cache_key.clone(), generation: old_generation, due_at: old_due_at });
+   } else if !crate::cache::refresh_event_is_current(&event.cache_key, event.generation) {
       return;
-   }
-   if !armed.insert(event.cache_key.clone()) {
+   } else if schedule.len() >= crate::statics::BACKGROUND_REFRESH_ACTIVE_LIMIT {
+      crate::cache::answer_cache_mark_refresh_attempted(&event.cache_key, event.generation);
+      crate::stats::increment_refresh_skipped();
       return;
    }
 
-   schedule.push(ScheduledRefresh { cache_key: event.cache_key, generation: event.generation, due_at: event.due_at });
+   armed.insert(event.cache_key.clone(), (event.due_at, event.generation));
+   schedule.insert(ScheduledRefresh { cache_key: event.cache_key, generation: event.generation, due_at: event.due_at });
 }
 
 fn dispatch(
    event: ScheduledRefresh,
-   now: tokio::time::Instant,
    semaphore: &Arc<tokio::sync::Semaphore>,
-   rate: &mut SendRate,
-   background_tx: &kanal::AsyncSender<crate::network::UpstreamQuery>,
+   background_tx_channels: &[kanal::AsyncSender<crate::network::UpstreamQuery>],
+   schedule: &mut BTreeSet<ScheduledRefresh>,
+   armed: &mut ArmedRefreshes,
 ) {
    let Ok(permit) = semaphore.clone().try_acquire_owned() else {
-      crate::cache::answer_cache_mark_refresh_attempted(&event.cache_key, event.generation);
+      retry(event, schedule, armed);
       return;
    };
-   if !rate.take(now) {
-      crate::cache::answer_cache_mark_refresh_attempted(&event.cache_key, event.generation);
-      return;
-   }
 
    let registration = crate::cache::background_refresh_register(&event.cache_key, event.generation, permit);
-   let crate::cache::BackgroundRefreshRegistration::Leader { upstream_id, deadline, query } = registration else {
-      if matches!(registration, crate::cache::BackgroundRefreshRegistration::AlreadyInFlight) {
-         crate::cache::answer_cache_mark_refresh_attempted(&event.cache_key, event.generation);
+   let (upstream_id, deadline, query) = match registration {
+      crate::cache::BackgroundRefreshRegistration::Leader { upstream_id, deadline, query } => (upstream_id, deadline, query),
+      crate::cache::BackgroundRefreshRegistration::Retry => {
+         retry(event, schedule, armed);
+         return;
       }
-      return;
+      crate::cache::BackgroundRefreshRegistration::Stale => return,
    };
 
    let mut data = Vec::with_capacity(query.len() + 2);
    data.extend_from_slice(&(query.len() as u16).to_be_bytes());
    data.extend_from_slice(&query);
    let message = crate::network::UpstreamQuery { data, deadline };
+   let sends = background_tx_channels.iter().filter(|tx| tx.try_send(message.clone()) == Ok(true)).count();
 
-   if background_tx.try_send(message) != Ok(true) {
+   if sends > 0 {
+      if crate::cache::background_refresh_mark_sent(&event.cache_key, upstream_id) {
+         crate::stats::increment_refresh_started();
+      }
+   } else {
       crate::cache::background_refresh_cancel(&event.cache_key, upstream_id);
+      if crate::cache::answer_cache_rearm_refresh(&event.cache_key, event.generation) {
+         retry(event, schedule, armed);
+      } else {
+         crate::stats::increment_refresh_skipped();
+      }
    }
+}
+
+fn retry(event: ScheduledRefresh, schedule: &mut BTreeSet<ScheduledRefresh>, armed: &mut ArmedRefreshes) {
+   let event = crate::cache::RefreshEvent { cache_key: event.cache_key, generation: event.generation, due_at: event.due_at }
+      .retry_after(crate::statics::BACKGROUND_REFRESH_RETRY_DELAY);
+   admit(event, schedule, armed);
 }
