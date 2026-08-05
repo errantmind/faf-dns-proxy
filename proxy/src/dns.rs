@@ -252,18 +252,59 @@ pub fn get_question_as_string(dns_buf_start: *const u8, len: usize) -> String {
    }
 }
 
+const TTL_PARSE_FALLBACK_SECS: u64 = 10;
+
+/// Returns the first byte after an encoded DNS name without decompressing it.
+///
+/// A name can be a sequence of labels terminated by zero, a two-byte
+/// compression pointer, or labels followed by a compression pointer.
+#[inline]
+fn skip_dns_name(message: &[u8], mut offset: usize) -> Option<usize> {
+   loop {
+      let first_byte = *message.get(offset)?;
+      match first_byte & 0b1100_0000 {
+         0b1100_0000 => {
+            let second_byte = *message.get(offset.checked_add(1)?)?;
+            let pointer_offset = (((first_byte & 0b0011_1111) as usize) << 8) | second_byte as usize;
+            if pointer_offset >= message.len() {
+               return None;
+            }
+            return offset.checked_add(2);
+         }
+         0 => {
+            offset = offset.checked_add(1)?;
+            if first_byte == 0 {
+               return Some(offset);
+            }
+            offset = offset.checked_add(first_byte as usize)?;
+            if offset > message.len() {
+               return None;
+            }
+         }
+         // Label prefixes 01 and 10 are reserved.
+         _ => return None,
+      }
+   }
+}
+
+#[cold]
+fn ttl_parse_fallback(question: String, qtype: u16, qclass: u16) -> (String, &'static str, &'static str, u64) {
+   eprintln!("          Could not parse answer TTL for {}; using {}s", question, TTL_PARSE_FALLBACK_SECS);
+   (question, map_qtype_to_str(qtype), map_qclass_to_str(qclass), TTL_PARSE_FALLBACK_SECS)
+}
+
 #[inline]
 pub fn get_question_as_string_and_lowest_ttl(dns_buf_start: *const u8, len: usize) -> (String, &'static str, &'static str, u64) {
    let mut question_str = String::new();
-   let mut ttl: u32 = u32::MAX;
    unsafe {
       const QNAME_TERMINATOR: u8 = 0;
       let dns_buf_end = dns_buf_start.add(len);
+      let dns_message = core::slice::from_raw_parts(dns_buf_start, len);
 
       // Get the number of answers
       let mut dns_qname_qtype_qclass_walker = dns_buf_start.add(6);
       debug_assert!(dns_qname_qtype_qclass_walker.add(2) <= dns_buf_end);
-      let num_answers = u16::swap_bytes(*(dns_qname_qtype_qclass_walker as *const _ as *const u16));
+      let num_answers = u16::from_be_bytes([*dns_qname_qtype_qclass_walker, *dns_qname_qtype_qclass_walker.add(1)]);
 
       // Skip the header
       dns_qname_qtype_qclass_walker = dns_qname_qtype_qclass_walker.add(6);
@@ -278,66 +319,44 @@ pub fn get_question_as_string_and_lowest_ttl(dns_buf_start: *const u8, len: usiz
          dns_qname_qtype_qclass_walker = dns_qname_qtype_qclass_walker.add(1 + segment_len);
       }
 
-      //// Skip Question section's QNAME TERMINATOR + QTYPE + QCLASS
-      //dns_qname_qtype_qclass_walker = dns_qname_qtype_qclass_walker.add(5);
-
-      // Include the entire query (.. + QTYPE + QCLASS)
-
-      // Skip QNAME TERMINATOR
+      // Skip QNAME terminator.
       dns_qname_qtype_qclass_walker = dns_qname_qtype_qclass_walker.add(1);
 
-      // Add QTYPE
-      let qtype = u16::swap_bytes(*(dns_qname_qtype_qclass_walker as *const _ as *const u16));
+      let qtype = u16::from_be_bytes([*dns_qname_qtype_qclass_walker, *dns_qname_qtype_qclass_walker.add(1)]);
       dns_qname_qtype_qclass_walker = dns_qname_qtype_qclass_walker.add(2);
 
-      // Add QCLASS
-      let qclass = u16::swap_bytes(*(dns_qname_qtype_qclass_walker as *const _ as *const u16));
+      let qclass = u16::from_be_bytes([*dns_qname_qtype_qclass_walker, *dns_qname_qtype_qclass_walker.add(1)]);
       dns_qname_qtype_qclass_walker = dns_qname_qtype_qclass_walker.add(2);
 
-      // Parse TTL from answers.
-      // This is where it gets tricky due to the compression scheme used. It can use pointers (offsets) but doesn't have to.
-      // We will also be tricky to do the minimum amout of parsing.
-      // To grok, please refer to the reference mentioned towards the top of this file.
-
-      for i in 0..num_answers {
-         if i > 0 {
-            // If there is only a single answer, we don't want to do the work of getting to the next TTL.
-            // Similarly, if this is the last answer, we don't want to do redundant work for getting to the next entry.
-            // So, by putting this logic first, we avoid both.
-
-            // Skips past the previous TTL
-            dns_qname_qtype_qclass_walker = dns_qname_qtype_qclass_walker.add(4);
-
-            // Skips RDATA section
-            let size_be = *(dns_qname_qtype_qclass_walker as *const _ as *const u16);
-            let rdlength = u16::swap_bytes(size_be);
-            dns_qname_qtype_qclass_walker = dns_qname_qtype_qclass_walker.add(2 + rdlength as usize);
-         }
-
-         let first_byte = *dns_qname_qtype_qclass_walker;
-         if first_byte >= 192 {
-            // A pointer has been specified so skip the 2 byte section (pointer specified and offset), the TYPE and CLASS
-            dns_qname_qtype_qclass_walker = dns_qname_qtype_qclass_walker.add(6);
-         } else {
-            // I've noticed this is hit for 'cdn.fluidpreview.office.net'
-            println!(
-               "          {} parse malfunction. DNS may be misconfigured for this domain. TTL could not be determined, using {}s",
-               question_str, 10
-            );
-
-            return (question_str, map_qtype_to_str(qtype), map_qclass_to_str(qclass), 10);
-         }
-
-         let size_be = *(dns_qname_qtype_qclass_walker as *const _ as *const u32);
-         let latest_ttl = u32::swap_bytes(size_be);
-         if latest_ttl < ttl {
-            ttl = latest_ttl;
-         }
+      if num_answers == 0 {
+         return (question_str, map_qtype_to_str(qtype), map_qclass_to_str(qclass), 0);
       }
 
-      // If no answers were processed (NXDOMAIN/NODATA), set TTL to 0
-      if num_answers == 0 {
-         ttl = 0;
+      let mut answer_offset = dns_qname_qtype_qclass_walker.offset_from(dns_buf_start) as usize;
+      let mut ttl = u32::MAX;
+
+      for _ in 0..num_answers {
+         let Some(fixed_fields_offset) = skip_dns_name(dns_message, answer_offset) else {
+            return ttl_parse_fallback(question_str, qtype, qclass);
+         };
+         let Some(fixed_fields_end) = fixed_fields_offset.checked_add(10) else {
+            return ttl_parse_fallback(question_str, qtype, qclass);
+         };
+         let Some(fixed_fields) = dns_message.get(fixed_fields_offset..fixed_fields_end) else {
+            return ttl_parse_fallback(question_str, qtype, qclass);
+         };
+
+         let latest_ttl = u32::from_be_bytes(fixed_fields[4..8].try_into().unwrap());
+         ttl = ttl.min(latest_ttl);
+
+         let rdlength = u16::from_be_bytes(fixed_fields[8..10].try_into().unwrap()) as usize;
+         let Some(next_answer_offset) = fixed_fields_end.checked_add(rdlength) else {
+            return ttl_parse_fallback(question_str, qtype, qclass);
+         };
+         if next_answer_offset > dns_message.len() {
+            return ttl_parse_fallback(question_str, qtype, qclass);
+         }
+         answer_offset = next_answer_offset;
       }
 
       (question_str, map_qtype_to_str(qtype), map_qclass_to_str(qclass), ttl as u64)
