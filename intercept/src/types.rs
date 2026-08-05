@@ -1,6 +1,5 @@
 //! Public types for the eBPF DNS monitoring library
 
-use plain::Plain;
 use std::fmt;
 use std::net::{Ipv4Addr, SocketAddrV4};
 
@@ -105,8 +104,6 @@ pub(crate) struct UdpPacketInfo {
     pub padding: [u8; 2],
     pub tree: [ProcessNodeRaw; 5], // MAX_PROCESS_TREE_DEPTH
 }
-
-unsafe impl Plain for UdpPacketInfo {}
 
 impl UdpPacketInfo {
     /// Convert raw eBPF data to public API type

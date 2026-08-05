@@ -117,11 +117,6 @@ pub async fn go(port: u16) {
          assert!(read_bytes <= crate::dns::MAX_DNS_MESSAGE_SIZE, "Received an oversized datagram on the UDP socket");
          let udp_segment = &mut query_buf[2..read_bytes + 2];
 
-         // Process domain filtering
-         if crate::filter::process_domain_filtering(udp_segment, &listener_socket, &client_addr).await {
-            continue;
-         }
-
          let id = crate::dns::get_id_network_byte_order(udp_segment.as_ptr(), udp_segment.len());
          let cache_key = crate::dns::get_query_unique_id(udp_segment.as_ptr(), udp_segment.len());
          let current_time = tokio::time::Instant::now();
@@ -220,9 +215,6 @@ pub async fn go(port: u16) {
          }
       }
    });
-
-   // Initialize domain filtering system
-   crate::filter::initialize_blocklists().await;
 
    proxy.await.unwrap();
 }

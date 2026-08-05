@@ -30,11 +30,7 @@ pub struct Args {
    #[clap(short, long, default_value_t = 53)]
    pub port: u16,
 
-   /// enable domain filtering from pre-defined blocklists.
-   #[clap(long)]
-   pub blocklists: bool,
-
-   /// data directory to store blocklists. Defaults to a system temp directory.
+   /// data directory for generated charts. Defaults to a system temp directory.
    #[clap(long)]
    pub data_directory: Option<std::path::PathBuf>,
 
@@ -59,8 +55,4 @@ pub struct Args {
    /// enable SNI (Server Name Indication) in TLS connections to upstream DNS servers.
    #[clap(long)]
    pub sni: bool,
-
-   /// block all IPv6 (AAAA) DNS queries by returning NXDOMAIN responses.
-   #[clap(long)]
-   pub disable_ipv6: bool,
 }

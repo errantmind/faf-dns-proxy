@@ -129,7 +129,7 @@ impl DnsMonitor {
             return None;
         }
 
-        let info = unsafe { *(data.as_ptr() as *const UdpPacketInfo) };
+        let info = unsafe { std::ptr::read_unaligned(data.as_ptr() as *const UdpPacketInfo) };
         Some(info.to_dns_request_info())
     }
 

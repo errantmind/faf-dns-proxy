@@ -23,7 +23,6 @@ An example of the default (non-daemon) output, which gives some immediate insigh
 
 ## Features
 
-- DNS filtering (e.g. adblock - disabled by default)
 - High-performance client identification using eBPF with netlink fallback (Linux only, disabled by default)
 - Chart output to show the distribution of uncached dns query latencies (disabled by default)
 - Full-duplex async design.
@@ -101,7 +100,6 @@ The output shows `[EBPF]` or `[NETLINK]` to indicate which method was used.
 
 - By default, Firefox and some other browsers bypass the system's DNS, using their own built-in DoH. To reap the benefits of FaF while browsing, ensure this is disabled. This is usually somewhere in the browser's network settings.
 - Only IPv4 upstream DNS resolvers are currently supported.
-- Using the blocklist adds some delay as you might expect. In my tests the median overhead was about 10 microseconds locally.
 
 ## Code Tour
 

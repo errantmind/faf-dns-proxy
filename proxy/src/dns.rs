@@ -228,30 +228,6 @@ pub fn get_query_unique_id<'a>(dns_buf_start: *const u8, len: usize) -> &'a [u8]
    }
 }
 
-#[inline]
-pub fn get_question_as_string(dns_buf_start: *const u8, len: usize) -> String {
-   let mut question_str = String::new();
-   unsafe {
-      const QNAME_TERMINATOR: u8 = 0;
-      let dns_buf_end = dns_buf_start.add(len);
-
-      // Skip the header
-      let mut dns_qname_qtype_qclass_walker = dns_buf_start.add(12);
-
-      while *dns_qname_qtype_qclass_walker != QNAME_TERMINATOR && dns_qname_qtype_qclass_walker != dns_buf_end {
-         let segment_len = *dns_qname_qtype_qclass_walker as usize;
-         if !question_str.is_empty() {
-            question_str.push('.');
-         }
-         question_str
-            .push_str(std::str::from_utf8(core::slice::from_raw_parts(dns_qname_qtype_qclass_walker.add(1), segment_len)).unwrap());
-         dns_qname_qtype_qclass_walker = dns_qname_qtype_qclass_walker.add(1 + segment_len);
-      }
-
-      question_str
-   }
-}
-
 const TTL_PARSE_FALLBACK_SECS: u64 = 10;
 
 /// Returns the first byte after an encoded DNS name without decompressing it.
@@ -360,32 +336,6 @@ pub fn get_question_as_string_and_lowest_ttl(dns_buf_start: *const u8, len: usiz
       }
 
       (question_str, map_qtype_to_str(qtype), map_qclass_to_str(qclass), ttl as u64)
-   }
-}
-
-/// Extract the qtype from a DNS query packet
-#[inline]
-pub fn get_qtype_from_query(dns_buf_start: *const u8, len: usize) -> u16 {
-   unsafe {
-      const QNAME_TERMINATOR: u8 = 0;
-      let dns_buf_end = dns_buf_start.add(len);
-      // Skip the header (12 bytes)
-      let mut dns_qname_walker = dns_buf_start.add(12);
-
-      // Walk through the QNAME to find the terminator
-      while *dns_qname_walker != QNAME_TERMINATOR && dns_qname_walker < dns_buf_end {
-         dns_qname_walker = dns_qname_walker.add(1);
-      }
-
-      // Skip the QNAME terminator (1 byte) to get to QTYPE
-      dns_qname_walker = dns_qname_walker.add(1);
-
-      // Read QTYPE (2 bytes in network byte order)
-      if dns_qname_walker.add(2) <= dns_buf_end {
-         u16::swap_bytes(*(dns_qname_walker as *const u16))
-      } else {
-         0 // Return 0 if we can't read the qtype safely
-      }
    }
 }
 

@@ -17,11 +17,9 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
 mod args;
-mod blocklist;
 mod cache;
 mod chart;
 mod dns;
-mod filter;
 mod network;
 mod proxy;
 mod refresh;
