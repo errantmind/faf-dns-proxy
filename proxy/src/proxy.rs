@@ -202,8 +202,7 @@ pub async fn go(port: u16) {
                crate::stats::increment_cache_miss();
                crate::dns::set_id_network_byte_order(upstream_id, udp_segment);
 
-               // Write both bytes at once after converting to Big Endian
-               unsafe { *(query_buf.as_mut_ptr() as *mut u16) = (read_bytes as u16).to_be() };
+               query_buf[..2].copy_from_slice(&(read_bytes as u16).to_be_bytes());
                let query = crate::network::UpstreamQuery { data: query_buf[0..read_bytes + 2].to_vec(), deadline };
                for tx in &tx_channels {
                   match tx.send(query.clone()).await {

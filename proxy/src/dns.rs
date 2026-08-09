@@ -101,13 +101,13 @@ pub fn create_servfail_response(dns_buf: &mut [u8]) -> Option<()> {
 #[inline]
 pub fn get_id_network_byte_order(dns_buf_start: *const u8, len: usize) -> u16 {
    debug_assert!(len >= 2);
-   unsafe { *(dns_buf_start as *const u16) }
+   unsafe { std::ptr::read_unaligned(dns_buf_start.cast::<u16>()) }
 }
 
 #[inline]
 pub fn set_id_network_byte_order(new_id: u16, input: &mut [u8]) {
    debug_assert!(input.len() >= 2);
-   unsafe { *(input as *mut _ as *mut u16) = new_id };
+   unsafe { std::ptr::write_unaligned(input.as_mut_ptr().cast::<u16>(), new_id) };
 }
 
 #[inline]
