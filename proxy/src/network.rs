@@ -334,7 +334,6 @@ async fn handle_reads(
                let wrote_len_maybe = listener_addr.send_to(&answer, first_waiter.client_addr).await;
 
                if let Ok(wrote_len) = wrote_len_maybe {
-                  // Due to how rust implements IO for send_to, we will never have a len_written less than 0
                   if wrote_len == 0 {
                      eprintln!("Failed to write response to the client. 0 bytes written at {}:{}", file!(), line!());
                   }

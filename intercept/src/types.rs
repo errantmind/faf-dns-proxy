@@ -77,7 +77,6 @@ impl fmt::Display for DnsRequestInfo {
     }
 }
 
-// Internal types for eBPF interop (kept from original implementation)
 
 #[repr(C, packed)]
 #[derive(Debug, Clone, Copy)]
@@ -102,7 +101,7 @@ pub(crate) struct UdpPacketInfo {
     pub flags: u8,
     pub tree_depth: u8,
     pub padding: [u8; 2],
-    pub tree: [ProcessNodeRaw; 5], // MAX_PROCESS_TREE_DEPTH
+    pub tree: [ProcessNodeRaw; 5],
 }
 
 impl UdpPacketInfo {

@@ -11,7 +11,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Create and configure the monitor
     let mut monitor = DnsMonitor::new()?;
 
-    // Enable debug output to get the same behavior as the original
     monitor.enable_debug_output();
 
     // Set up Ctrl+C handler
@@ -28,7 +27,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     match monitor.start_monitoring() {
         Ok(()) => {
             // For debug mode, we need to continuously poll to show real-time output
-            // This simulates the old background polling behavior
             while running.load(std::sync::atomic::Ordering::Relaxed) {
                 // Poll by doing a dummy lookup - this triggers the ring buffer poll
                 // We use a dummy address that won't match anything

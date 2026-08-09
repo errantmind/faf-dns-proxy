@@ -32,9 +32,7 @@ impl ServerStats {
    }
 }
 
-// Global atomic statistics array - safe, thread-safe, zero-overhead
 static SERVER_STATS: [ServerStats; DNS_SERVERS.len()] = {
-   // Create array with const new() to avoid complex initialization
    [const { ServerStats::new() }; DNS_SERVERS.len()]
 };
 

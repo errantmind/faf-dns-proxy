@@ -5,7 +5,7 @@
 
 #define AF_INET 2
 #define bpf_ntohs(x) __builtin_bswap16(x)
-#define MAX_PROCESS_TREE_DEPTH 5  // Reduced for DNS monitoring performance
+#define MAX_PROCESS_TREE_DEPTH 5
 #define PR_SET_NAME 15
 
 struct process_node {
@@ -32,10 +32,9 @@ struct udp_packet_info {
 
 struct {
     __uint(type, BPF_MAP_TYPE_RINGBUF);
-    __uint(max_entries, 64 * 1024);  // Reduced for DNS-only monitoring
+    __uint(max_entries, 64 * 1024);
 } rb SEC(".maps");
 
-// Removed port_filter map - we do early DNS filtering instead
 
 struct process_name_cache_entry {
     __u8 friendly_name[16];
@@ -44,7 +43,7 @@ struct process_name_cache_entry {
 
 struct {
     __uint(type, BPF_MAP_TYPE_LRU_HASH);
-    __uint(max_entries, 1024);  // Reduced for DNS-only monitoring
+    __uint(max_entries, 1024);
     __type(key, __u32);
     __type(value, struct process_name_cache_entry);
 } process_name_cache SEC(".maps");
@@ -227,7 +226,6 @@ int trace_udp_sendmsg(struct pt_regs *ctx) {
         info->flags |= 16; // tree_valid
     } else {
         info->tree_depth = 0;
-        // Tree already zeroed by memset above
     }
     
     // Extract source information
@@ -240,11 +238,9 @@ int trace_udp_sendmsg(struct pt_regs *ctx) {
         info->sport = 0;
     }
     
-    // Extract destination information (optimized for DNS)
-    info->dport = 53; // We already know this is DNS traffic
+    info->dport = 53;
     info->flags |= 8; // dport_valid
     
-    // Only extract destination IP (we don't need the complex logic for port)
     if (msg) {
         void *msg_name = BPF_CORE_READ(msg, msg_name);
         if (msg_name) {
@@ -270,7 +266,6 @@ int trace_udp_sendmsg(struct pt_regs *ctx) {
     // Capture processing end time
     info->processing_end_ns = bpf_ktime_get_ns();
     
-    // No need for port filtering - we already filtered for DNS at the top
     bpf_ringbuf_submit(info, 0);
     return 0;
 }

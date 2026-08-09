@@ -133,7 +133,6 @@ impl DnsMonitor {
         Some(info.to_dns_request_info())
     }
 
-    /// Print debug event (same format as original implementation)
     fn print_debug_event(info: &DnsRequestInfo) {
         let saddr_str = if info.source_addr.is_unspecified() {
             "0.0.0.0".to_string()

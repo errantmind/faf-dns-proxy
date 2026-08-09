@@ -16,7 +16,6 @@ You should have received a copy of the GNU Affero General Public License
 along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
-// STATS removed - now using atomic counters in stats.rs module
 
 pub async fn go(port: u16) {
    let proxy = tokio::task::spawn(async move {
@@ -133,7 +132,6 @@ pub async fn go(port: u16) {
             let wrote_len_maybe = listener_socket.send_to(&answer, &client_addr).await;
 
             if let Ok(wrote_len) = wrote_len_maybe {
-               // Due to how rust implements IO for send_to, we will never have a len_written less than 0
                if wrote_len == 0 {
                   eprintln!("Failed to write response to the client. 0 bytes written at {}:{}", file!(), line!());
                   continue;

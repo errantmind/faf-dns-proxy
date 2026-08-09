@@ -25,7 +25,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("DNS monitor created successfully");
 
-    // Start monitoring (this will load eBPF programs and start background thread)
     monitor.start_monitoring()?;
     println!("DNS monitoring started");
 
