@@ -120,32 +120,28 @@ fn print_run_summary(run_time: std::time::Duration) {
    let cache_misses = QUERY_STATS.cache_misses.load(Ordering::Relaxed);
    let queries = cache_hits.saturating_add(cache_misses);
    let refresh_started = REFRESH_STATS.started.load(Ordering::Relaxed);
-   let refresh_succeeded = REFRESH_STATS.succeeded.load(Ordering::Relaxed);
    let refresh_useful = REFRESH_STATS.useful.load(Ordering::Relaxed);
-   let refresh_promoted = REFRESH_STATS.promoted.load(Ordering::Relaxed);
    let refresh_failed = REFRESH_STATS.failed.load(Ordering::Relaxed);
-   let refresh_skipped = REFRESH_STATS.skipped.load(Ordering::Relaxed);
 
-   let hit_rate = percentage(cache_hits, queries);
-   let refresh_efficiency = percentage(refresh_useful, refresh_started);
-   let hit_rate_contribution = percentage(refresh_useful, queries);
+   let hit_rate = if queries == 0 { "n/a".to_string() } else { format!("{:.1}%", percentage(cache_hits, queries)) };
    let total_seconds = run_time.as_secs();
    let hours = total_seconds / 3_600;
    let minutes = total_seconds % 3_600 / 60;
    let seconds = total_seconds % 60;
 
-   println!(
-      "\n[FaF stats | run {hours:02}:{minutes:02}:{seconds:02}]\n  DNS      {:>10} queries | {:>10} hits ({hit_rate:.2}%) | {} misses\n  Refresh  {:>10} started | {:>10} succeeded | {} useful ({refresh_efficiency:.2}%) | +{hit_rate_contribution:.2} pp hit rate\n           {:>10} promoted | {:>10} failed | {} skipped",
-      format_count(queries),
-      format_count(cache_hits),
-      format_count(cache_misses),
-      format_count(refresh_started),
-      format_count(refresh_succeeded),
-      format_count(refresh_useful),
-      format_count(refresh_promoted),
-      format_count(refresh_failed),
-      format_count(refresh_skipped),
-   );
+   let mut output = format!("[FaF {hours:02}:{minutes:02}:{seconds:02} total] queries={} | cache-hit={hit_rate}", format_count(queries));
+   if refresh_started > 0 {
+      output.push_str(&format!(
+         " | useful-refreshes={}/{} ({:.1}%)",
+         format_count(refresh_useful),
+         format_count(refresh_started),
+         percentage(refresh_useful, refresh_started),
+      ));
+   }
+   if refresh_failed > 0 {
+      output.push_str(&format!(" | refresh-failed={}", format_count(refresh_failed)));
+   }
+   println!("{output}");
 }
 
 #[inline]
