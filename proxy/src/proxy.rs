@@ -88,16 +88,16 @@ pub async fn go(port: u16) {
          #[cfg(target_os = "linux")]
          let header = if crate::statics::ARGS.client_ident {
             format!(
-               "  {:>4} -> {:<50} {:>7} {:>3} {:>7} {:^23} {:>7} - {:^40}",
-               "TIME", "DOMAIN", "TYPE", "CLS", "TTL", "UPSTREAM", "REF", "PROCESS (CLIENT) [METHOD]"
+               "{:>11} -> {:<50} {:>7} {:>3} {:>7} {:^23} {:>7} - {:^40}",
+               "PROXY TIME", "DOMAIN", "TYPE", "CLS", "TTL", "UPSTREAM", "REF", "PROCESS (CLIENT) [METHOD]"
             )
          } else {
-            format!("  {:>4} -> {:<50} {:>7} {:>3} {:>7} {:^23} {:>7}", "TIME", "DOMAIN", "TYPE", "CLS", "TTL", "UPSTREAM", "REF")
+            format!("{:>11} -> {:<50} {:>7} {:>3} {:>7} {:^23} {:>7}", "PROXY TIME", "DOMAIN", "TYPE", "CLS", "TTL", "UPSTREAM", "REF")
          };
 
          #[cfg(not(target_os = "linux"))]
          let header =
-            format!("  {:>4} -> {:<50} {:>7} {:>3} {:>7} {:^23} {:>7}", "TIME", "DOMAIN", "TYPE", "CLS", "TTL", "UPSTREAM", "REF");
+            format!("{:>11} -> {:<50} {:>7} {:>3} {:>7} {:^23} {:>7}", "PROXY TIME", "DOMAIN", "TYPE", "CLS", "TTL", "UPSTREAM", "REF");
 
          println!("{header}");
          println!("{}", "=".repeat(header.len()));
@@ -113,6 +113,7 @@ pub async fn go(port: u16) {
                continue;
             }
          };
+         let received_at = tokio::time::Instant::now();
          assert!(read_bytes <= crate::dns::MAX_DNS_MESSAGE_SIZE, "Received an oversized datagram on the UDP socket");
          let udp_segment = &mut query_buf[2..read_bytes + 2];
 
@@ -163,7 +164,7 @@ pub async fn go(port: u16) {
          let registration = crate::cache::in_flight_register(
             cache_key,
             udp_segment,
-            crate::cache::InFlightWaiter { client_addr: client_addr_ipv4, client_id: id },
+            crate::cache::InFlightWaiter { client_addr: client_addr_ipv4, client_id: id, received_at },
             current_time,
          );
 

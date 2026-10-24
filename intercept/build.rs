@@ -21,17 +21,15 @@ fn main() {
     let force_build = env::var_os("FORCE_BUILD_EBPF").is_some();
     if force_build || !precompiled_path.exists() {
         if force_build {
-            println!("cargo:warning=Building eBPF from source (FORCE_BUILD_EBPF set)");
+            eprintln!("Building eBPF from source (FORCE_BUILD_EBPF set)");
         } else {
-            println!(
-                "cargo:warning=Building eBPF from source (no precompiled object for {target_arch})"
-            );
+            eprintln!("Building eBPF from source (no precompiled object for {target_arch})");
         }
 
         check_build_dependencies(&target_arch);
         build_from_source(&manifest_dir, &out_dir, &object_path);
     } else {
-        println!("cargo:warning=Using precompiled eBPF object for {target_arch}");
+        eprintln!("Using precompiled eBPF object for {target_arch}");
         fs::copy(&precompiled_path, &object_path).unwrap_or_else(|error| {
             panic!(
                 "Failed to copy precompiled eBPF object from {} to {}: {error}",
@@ -72,7 +70,7 @@ fn build_from_source(manifest_dir: &Path, out_dir: &Path, object_path: &Path) {
 }
 
 fn generate_vmlinux_h(output_path: &Path) {
-    println!("cargo:warning=Generating vmlinux.h for current kernel...");
+    eprintln!("Generating vmlinux.h for current kernel...");
 
     let output = Command::new("bpftool")
         .args([
@@ -96,10 +94,7 @@ fn generate_vmlinux_h(output_path: &Path) {
     fs::write(output_path, &output.stdout)
         .unwrap_or_else(|error| panic!("Failed to write {}: {error}", output_path.display()));
 
-    println!(
-        "cargo:warning=Generated vmlinux.h with {} bytes",
-        output.stdout.len()
-    );
+    eprintln!("Generated vmlinux.h with {} bytes", output.stdout.len());
 }
 
 fn check_build_dependencies(target_arch: &str) {

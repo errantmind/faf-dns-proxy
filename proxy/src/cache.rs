@@ -20,6 +20,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 pub struct InFlightWaiter {
    pub client_addr: std::net::SocketAddrV4,
    pub client_id: u16,
+   pub received_at: tokio::time::Instant,
 }
 
 pub struct InFlightEntry {
@@ -124,7 +125,7 @@ fn lease_is_active(lease_until_ms: u64) -> bool {
 fn set_refresh_phase(state: &std::sync::atomic::AtomicU8, phase: u8) {
    use std::sync::atomic::Ordering;
 
-   let _ = state.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| Some((current & REFRESH_USEFUL_RECORDED) | phase));
+   let _ = state.try_update(Ordering::Relaxed, Ordering::Relaxed, |current| Some((current & REFRESH_USEFUL_RECORDED) | phase));
 }
 
 fn join_in_flight(in_flight: &mut InFlightEntry, waiter: InFlightWaiter) -> InFlightRegistration {
@@ -172,9 +173,7 @@ pub fn in_flight_register(
             deadline
          });
 
-         if IN_FLIGHT_COUNT
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |count| (count < MAX_IN_FLIGHT).then_some(count + 1))
-            .is_err()
+         if IN_FLIGHT_COUNT.try_update(Ordering::Relaxed, Ordering::Relaxed, |count| (count < MAX_IN_FLIGHT).then_some(count + 1)).is_err()
          {
             return InFlightRegistration::Overflow;
          }
@@ -223,9 +222,7 @@ pub fn background_refresh_register(
             _ => return BackgroundRefreshRegistration::Stale,
          };
 
-         if IN_FLIGHT_COUNT
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |count| (count < MAX_IN_FLIGHT).then_some(count + 1))
-            .is_err()
+         if IN_FLIGHT_COUNT.try_update(Ordering::Relaxed, Ordering::Relaxed, |count| (count < MAX_IN_FLIGHT).then_some(count + 1)).is_err()
          {
             return BackgroundRefreshRegistration::Retry;
          }
@@ -438,7 +435,7 @@ pub fn answer_cache_get_for_client(cache_key: &[u8], current_time: tokio::time::
    if cached_response.refresh_state.load(Ordering::Relaxed) & REFRESH_PHASE_MASK == REFRESH_ELIGIBLE
       && cached_response
          .refresh_state
-         .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |state| {
+         .try_update(Ordering::Relaxed, Ordering::Relaxed, |state| {
             (state & REFRESH_PHASE_MASK == REFRESH_ELIGIBLE).then_some((state & REFRESH_USEFUL_RECORDED) | REFRESH_ARMED)
          })
          .is_ok()

@@ -307,11 +307,13 @@ async fn handle_reads(
                (None, "")
             };
 
+            let mut proxy_elapsed = None;
             let mut waiters = in_flight.waiters.into_iter();
             if let Some(first_waiter) = waiters.next() {
                let mut answer = udp_segment_no_tcp_prefix.to_vec();
                crate::dns::set_id_network_byte_order(first_waiter.client_id, &mut answer);
                let wrote_len_maybe = listener_addr.send_to(&answer, first_waiter.client_addr).await;
+               proxy_elapsed = Some(first_waiter.received_at.elapsed());
 
                if let Ok(wrote_len) = wrote_len_maybe {
                   if wrote_len == 0 {
@@ -341,11 +343,12 @@ async fn handle_reads(
 
             if !crate::statics::ARGS.daemon
                && let Some(_saved_addr) = saved_addr
+               && let Some(proxy_elapsed) = proxy_elapsed
             {
                let (fastest_count, refused_count) = crate::stats::increment_fastest(upstream_dns_index);
-               let mut output = format!(
-                  "{:>4}ms -> {:<50} {:>7} {:>3} {:>7} {:>15} {:<7} {:>7}",
-                  dns_response.elapsed_ms,
+               let output = format!(
+                  "{:>8.1} ms -> {:<50} {:>7} {:>3} {:>7} {:>15} {:<7} {:>7}",
+                  proxy_elapsed.as_secs_f64() * 1_000.0,
                   dns_response.site_name,
                   dns_response.qtype_str,
                   dns_response.qclass_str,
@@ -356,14 +359,16 @@ async fn handle_reads(
                );
 
                #[cfg(target_os = "linux")]
-               if crate::statics::ARGS.client_ident {
-                  output = format!(
+               let output = if crate::statics::ARGS.client_ident {
+                  format!(
                      "{output} - {} ({}:{}) [{lookup_method}]",
                      client_pid_comm.map_or("UNKNOWN".to_string(), |(pid, comm)| format!("{pid}/{comm}")),
                      _saved_addr.ip(),
                      _saved_addr.port(),
-                  );
-               }
+                  )
+               } else {
+                  output
+               };
 
                println!("{output}");
             }
