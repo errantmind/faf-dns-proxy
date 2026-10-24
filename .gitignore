@@ -6,3 +6,4 @@
 /src/scratch.rs
 /benches
 intercept/src/vmlinux.h
+/faf-dns-proxy

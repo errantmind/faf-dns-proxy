@@ -8,7 +8,7 @@ edition = "2024"
 # Profiles inherited from workspace
 
 [features]
-default = []
+default = ["ebpf-client-ident"]
 ebpf-client-ident = ["dep:faf-dns-intercept"]
 
 [dependencies]
@@ -41,5 +41,7 @@ netlink-packet-core = "0.7.0"
 netlink-packet-sock-diag = "0.4.2"
 netlink-sys = "0.8.5"
 procfs = "0.16.0"
+
+[target.'cfg(all(target_os = "linux", target_arch = "x86_64"))'.dependencies]
 # high-performance DNS client identification via eBPF (optional)
 faf-dns-intercept = { path = "../intercept", optional = true }

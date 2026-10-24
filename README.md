@@ -4,7 +4,7 @@
 
 **Project Structure**: This repository contains two crates:
 - `proxy/` - Main DNS proxy application, included in the default workspace build
-- `intercept/` - Optional Linux-only eBPF client identification library; it is excluded from the workspace and built only when explicitly enabled on Linux
+- `intercept/` - eBPF client identification library; excluded from the workspace, built as a dependency by default on Linux x86_64
 
 FaF has been tested on Linux, Mac (M1), and Windows, and may work on other platforms as well.
 
@@ -23,7 +23,7 @@ An example of the default (non-daemon) output, which gives some immediate insigh
 
 ## Features
 
-- High-performance client identification using eBPF with netlink fallback (Linux only, disabled by default)
+- High-performance client identification using eBPF with netlink fallback (Linux only, enable with `--client-ident`)
 - Chart output to show the distribution of uncached dns query latencies (disabled by default)
 - Full-duplex async design.
 - Minimal parsing of DNS records to lower overhead.
@@ -52,7 +52,7 @@ There is no configuration file as the defaults will serve most users well. If yo
 
 ## How To Use This (Linux)?
 
-1. Clone this repository and build it using `cargo build --release -p faf-dns-proxy` on any supported platform. On Linux, eBPF support is optional: `cargo build --release -p faf-dns-proxy --features ebpf-client-ident`.
+1. Clone this repository and build with `cargo build --release -p faf-dns-proxy`. eBPF is included on Linux x86_64 and omitted on other targets.
 2. Stop your existing DNS resolver. See the next section for an example.
 3. Run the binary with elevated privileges so it can listen on port 53 (DNS).
 4. Navigate to some websites to check and see if it is working. You should see resolution information for each website you visit your terminal. If you don't, you may need to disable your brower's built-in DNS proxying service. This is usually in your brower's network settings and may be called `DoH` or `DNS over HTTPS`.
@@ -90,7 +90,7 @@ FaF DNS Proxy includes advanced client identification features to show which pro
 
 - **eBPF Fast Path**: Uses kernel-level eBPF probes for microsecond-latency process identification
 - **Netlink Fallback**: Falls back to netlink/procfs when eBPF is unavailable (~10ms overhead)
-- **Build with**: `cargo build --release -p faf-dns-proxy --features ebpf-client-ident` for eBPF support on Linux; Windows and macOS builds omit this optional Linux-only feature
+- **Build with**: `cargo build --release -p faf-dns-proxy` includes eBPF on Linux x86_64; add `--no-default-features` to omit it
 - **Runtime**: Use `--client-ident` flag, automatically detects and uses best available method
 - **Force fallback**: Use `--force-netlink` to bypass eBPF for debugging
 

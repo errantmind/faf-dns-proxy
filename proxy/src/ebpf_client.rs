@@ -22,17 +22,17 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 //! It intercepts DNS requests at the kernel level before they leave the system, providing
 //! microsecond-level latency with complete process information including process trees.
 
-#[cfg(feature = "ebpf-client-ident")]
+#[cfg(all(feature = "ebpf-client-ident", target_arch = "x86_64"))]
 use faf_dns_intercept::DnsMonitor;
 use std::net::SocketAddrV4;
-#[cfg(feature = "ebpf-client-ident")]
+#[cfg(all(feature = "ebpf-client-ident", target_arch = "x86_64"))]
 use std::sync::Mutex;
 
 /// High-performance eBPF-based client identification manager
 pub struct EbpfClientManager {
-   #[cfg(feature = "ebpf-client-ident")]
+   #[cfg(all(feature = "ebpf-client-ident", target_arch = "x86_64"))]
    monitor: Mutex<Option<DnsMonitor>>,
-   #[cfg(not(feature = "ebpf-client-ident"))]
+   #[cfg(not(all(feature = "ebpf-client-ident", target_arch = "x86_64")))]
    _phantom: std::marker::PhantomData<()>,
 }
 
@@ -48,9 +48,9 @@ impl EbpfClientManager {
    /// Create a new eBPF client manager
    pub fn new() -> Self {
       Self {
-         #[cfg(feature = "ebpf-client-ident")]
+         #[cfg(all(feature = "ebpf-client-ident", target_arch = "x86_64"))]
          monitor: Mutex::new(None),
-         #[cfg(not(feature = "ebpf-client-ident"))]
+         #[cfg(not(all(feature = "ebpf-client-ident", target_arch = "x86_64")))]
          _phantom: std::marker::PhantomData,
       }
    }
@@ -58,14 +58,13 @@ impl EbpfClientManager {
    /// Initialize the eBPF monitoring system
    /// Returns true if eBPF was successfully initialized, false if fallback should be used
    pub fn initialize(&self) -> bool {
-      #[cfg(feature = "ebpf-client-ident")]
+      #[cfg(all(feature = "ebpf-client-ident", target_arch = "x86_64"))]
       {
          match DnsMonitor::new() {
             Ok(mut monitor) => match monitor.start_monitoring() {
                Ok(_) => {
                   if let Ok(mut guard) = self.monitor.lock() {
                      *guard = Some(monitor);
-                     eprintln!("eBPF DNS monitoring initialized successfully - using fast path\n");
                      return true;
                   }
                }
@@ -79,7 +78,7 @@ impl EbpfClientManager {
          }
       }
 
-      #[cfg(not(feature = "ebpf-client-ident"))]
+      #[cfg(not(all(feature = "ebpf-client-ident", target_arch = "x86_64")))]
       {
          eprintln!("eBPF support not compiled in. Using netlink fallback.\n");
       }
@@ -90,7 +89,7 @@ impl EbpfClientManager {
    /// Look up client information for a given source address using eBPF fast path
    /// Returns None if eBPF is not available or no information was found
    pub fn lookup_client_info(&self, _source_addr: SocketAddrV4) -> Option<ClientInfo> {
-      #[cfg(feature = "ebpf-client-ident")]
+      #[cfg(all(feature = "ebpf-client-ident", target_arch = "x86_64"))]
       {
          if let Ok(guard) = self.monitor.lock() {
             if let Some(ref monitor) = *guard {
@@ -107,7 +106,7 @@ impl EbpfClientManager {
 
 impl Drop for EbpfClientManager {
    fn drop(&mut self) {
-      #[cfg(feature = "ebpf-client-ident")]
+      #[cfg(all(feature = "ebpf-client-ident", target_arch = "x86_64"))]
       {
          if let Ok(mut guard) = self.monitor.lock() {
             if let Some(mut monitor) = guard.take() {
