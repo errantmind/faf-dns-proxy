@@ -57,7 +57,7 @@ impl EbpfManager {
     }
 
     /// Create a ring buffer for receiving events
-    pub fn create_ringbuffer<F>(&'_ self, callback: F) -> Result<libbpf_rs::RingBuffer<'_>>
+    pub fn create_ringbuffer<F>(&self, callback: F) -> Result<libbpf_rs::RingBuffer<'static>>
     where
         F: Fn(&[u8]) -> i32 + 'static,
     {

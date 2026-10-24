@@ -12,6 +12,7 @@ use std::time::Duration;
 
 /// Main DNS monitor implementation
 pub struct DnsMonitor {
+    ringbuf: Option<libbpf_rs::RingBuffer<'static>>,
     ebpf_manager: EbpfManager,
     cache: DnsRequestCache,
     is_running: Arc<AtomicBool>,
@@ -22,6 +23,7 @@ impl DnsMonitor {
     /// Create a new DNS monitor
     pub fn new() -> Result<Self> {
         Ok(Self {
+            ringbuf: None,
             ebpf_manager: EbpfManager::new(),
             cache: DnsRequestCache::new(10_000, Duration::from_secs(30)),
             is_running: Arc::new(AtomicBool::new(false)),
@@ -37,6 +39,20 @@ impl DnsMonitor {
 
         // Load and attach eBPF programs
         self.ebpf_manager.load_and_attach()?;
+        let cache = self.cache.clone();
+        let debug_output = self.debug_output.clone();
+        self.ringbuf = Some(
+            self.ebpf_manager
+                .create_ringbuffer(move |data: &[u8]| -> i32 {
+                    if let Some(info) = Self::handle_event(data) {
+                        cache.insert(info.clone());
+                        if debug_output.load(Ordering::Relaxed) {
+                            Self::print_debug_event(&info);
+                        }
+                    }
+                    0
+                })?,
+        );
         self.is_running.store(true, Ordering::Relaxed);
 
         if self.debug_output.load(Ordering::Relaxed) {
@@ -58,6 +74,7 @@ impl DnsMonitor {
         }
 
         self.is_running.store(false, Ordering::Relaxed);
+        self.ringbuf = None;
     }
 
     /// Look up DNS request details for a given source address
@@ -76,25 +93,7 @@ impl DnsMonitor {
             return None;
         }
 
-        // Create a temporary ringbuffer for immediate polling
-        let cache = self.cache.clone();
-        let debug_output = self.debug_output.clone();
-
-        if let Ok(ringbuf) = self
-            .ebpf_manager
-            .create_ringbuffer(move |data: &[u8]| -> i32 {
-                if let Some(info) = Self::handle_event(data) {
-                    // Store in cache for later lookup
-                    cache.insert(info.clone());
-
-                    // Print debug output if enabled
-                    if debug_output.load(Ordering::Relaxed) {
-                        Self::print_debug_event(&info);
-                    }
-                }
-                0
-            })
-        {
+        if let Some(ringbuf) = &self.ringbuf {
             // Non-blocking poll to capture any pending events
             let _ = ringbuf.poll(Duration::from_nanos(0));
         }
