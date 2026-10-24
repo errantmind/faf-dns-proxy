@@ -41,7 +41,7 @@ pub const MINIMUM_TTL_OVERRIDE: u64 = 0;
 /// Recurring names remain refresh-active for this long after their latest foreground request.
 pub const BACKGROUND_REFRESH_LEASE: std::time::Duration = std::time::Duration::from_secs(60 * 60);
 /// Local safety limits protect foreground work; background refreshes otherwise shotgun every upstream.
-pub const BACKGROUND_REFRESH_ACTIVE_LIMIT: usize = 1024;
+pub const BACKGROUND_REFRESH_ACTIVE_LIMIT: usize = 1_024;
 pub const BACKGROUND_REFRESH_CONCURRENCY: usize = 4;
 pub const BACKGROUND_REFRESH_MARGIN: std::time::Duration = std::time::Duration::from_millis(250);
 pub const BACKGROUND_REFRESH_RETRY_DELAY: std::time::Duration = std::time::Duration::from_secs(1);

@@ -106,28 +106,25 @@ pub fn check_runtime_requirements() -> Result<()> {
         Ok((major, minor)) => {
             if major < 5 || (major == 5 && minor < 4) {
                 errors.push(format!(
-                    "Kernel {}.{} found, but Linux 5.4+ required for CO-RE support",
-                    major, minor
+                    "Kernel {major}.{minor} found, but Linux 5.4+ required for CO-RE support"
                 ));
             } else if major < 5 || (major == 5 && minor < 10) {
                 warnings.push(format!(
-                    "Kernel {}.{} found, Linux 5.10+ recommended for better stability",
-                    major, minor
+                    "Kernel {major}.{minor} found, Linux 5.10+ recommended for better stability"
                 ));
             }
         }
-        Err(msg) => warnings.push(format!("Could not detect kernel version: {}", msg)),
+        Err(msg) => warnings.push(format!("Could not detect kernel version: {msg}")),
     }
 
     // Check architecture (informational)
     match get_current_architecture() {
         Ok(arch) if arch != "x86_64" => {
             warnings.push(format!(
-                "Architecture '{}' detected - this program is optimized for x86_64",
-                arch
+                "Architecture '{arch}' detected - this program is optimized for x86_64"
             ));
         }
-        Err(msg) => warnings.push(format!("Could not detect architecture: {}", msg)),
+        Err(msg) => warnings.push(format!("Could not detect architecture: {msg}")),
         _ => {} // x86_64, all good
     }
 
@@ -135,7 +132,7 @@ pub fn check_runtime_requirements() -> Result<()> {
     if !warnings.is_empty() {
         eprintln!("⚠️  Runtime warnings:");
         for warning in &warnings {
-            eprintln!("  - {}", warning);
+            eprintln!("  - {warning}");
         }
         eprintln!();
     }
@@ -165,13 +162,13 @@ fn get_kernel_version() -> std::result::Result<(u32, u32), String> {
 
     // Parse version like "6.14.5-arch1-1" -> (6, 14)
     let parts: Vec<&str> = version_str.split('.').collect();
-    if parts.len() >= 2 {
-        if let (Ok(major), Ok(minor)) = (parts[0].parse::<u32>(), parts[1].parse::<u32>()) {
-            return Ok((major, minor));
-        }
+    if parts.len() >= 2
+        && let (Ok(major), Ok(minor)) = (parts[0].parse::<u32>(), parts[1].parse::<u32>())
+    {
+        return Ok((major, minor));
     }
 
-    Err(format!("Could not parse kernel version: {}", version_str))
+    Err(format!("Could not parse kernel version: {version_str}"))
 }
 
 fn get_current_architecture() -> std::result::Result<String, String> {

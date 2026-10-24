@@ -110,13 +110,11 @@ fn check_build_dependencies(target_arch: &str) {
         Ok(version) => {
             if version < 10 {
                 missing_deps.push(format!(
-                    "clang version {} found, but version 10+ required (15+ recommended)",
-                    version
+                    "clang version {version} found, but version 10+ required (15+ recommended)"
                 ));
             } else if version < 15 {
                 warnings.push(format!(
-                    "clang version {} found, version 15+ recommended for best compatibility",
-                    version
+                    "clang version {version} found, version 15+ recommended for best compatibility"
                 ));
             }
         }
@@ -134,13 +132,11 @@ fn check_build_dependencies(target_arch: &str) {
         Ok((major, minor)) => {
             if major < 5 || (major == 5 && minor < 4) {
                 missing_deps.push(format!(
-                    "Kernel {}.{} found, but Linux 5.4+ required for CO-RE support",
-                    major, minor
+                    "Kernel {major}.{minor} found, but Linux 5.4+ required for CO-RE support"
                 ));
             } else if major == 5 && minor < 10 {
                 warnings.push(format!(
-                    "Kernel {}.{} found, Linux 5.10+ recommended for better stability",
-                    major, minor
+                    "Kernel {major}.{minor} found, Linux 5.10+ recommended for better stability"
                 ));
             }
         }
@@ -149,8 +145,7 @@ fn check_build_dependencies(target_arch: &str) {
 
     if target_arch != "x86_64" {
         missing_deps.push(format!(
-            "Architecture '{}' is not supported - only x86_64 is currently supported",
-            target_arch
+            "Architecture '{target_arch}' is not supported - only x86_64 is currently supported"
         ));
     }
 
@@ -172,12 +167,12 @@ fn check_build_dependencies(target_arch: &str) {
 
     eprintln!("\n🔧 How to fix:");
     match detect_distribution() {
-        Some("ubuntu") | Some("debian") => {
+        Some("ubuntu" | "debian") => {
             eprintln!("  On Ubuntu/Debian:");
             eprintln!("    sudo apt update");
             eprintln!("    sudo apt install clang bpftool libbpf-dev linux-headers-$(uname -r)");
         }
-        Some("fedora") | Some("rhel") | Some("centos") => {
+        Some("fedora" | "rhel" | "centos") => {
             eprintln!("  On Fedora/RHEL/CentOS:");
             eprintln!("    sudo dnf install clang bpftool libbpf-devel kernel-devel");
         }

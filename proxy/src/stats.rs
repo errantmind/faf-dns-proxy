@@ -130,8 +130,8 @@ fn print_run_summary(run_time: std::time::Duration) {
    let refresh_efficiency = percentage(refresh_useful, refresh_started);
    let hit_rate_contribution = percentage(refresh_useful, queries);
    let total_seconds = run_time.as_secs();
-   let hours = total_seconds / 3600;
-   let minutes = total_seconds % 3600 / 60;
+   let hours = total_seconds / 3_600;
+   let minutes = total_seconds % 3_600 / 60;
    let seconds = total_seconds % 60;
 
    println!(

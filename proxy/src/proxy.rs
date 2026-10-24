@@ -28,7 +28,7 @@ pub async fn go(port: u16) {
       let mut background_tx_channels = Vec::with_capacity(crate::statics::DNS_SERVERS.len());
 
       for (dns_server_index, _) in crate::statics::DNS_SERVERS.iter().enumerate() {
-         let (tx, rx) = kanal::bounded_async::<crate::network::UpstreamQuery>(8192);
+         let (tx, rx) = kanal::bounded_async::<crate::network::UpstreamQuery>(8_192);
          let (background_tx, background_rx) = kanal::bounded_async::<crate::network::UpstreamQuery>(64);
          tokio::task::spawn(crate::network::upstream_tls_handler(rx, Some(background_rx), dns_server_index, listener_socket.clone()));
          tx_channels.push(tx);
@@ -99,7 +99,7 @@ pub async fn go(port: u16) {
          let header =
             format!("  {:>4} -> {:<50} {:>7} {:>3} {:>7} {:^23} {:>7}", "TIME", "DOMAIN", "TYPE", "CLS", "TTL", "UPSTREAM", "REF");
 
-         println!("{}", header);
+         println!("{header}");
          println!("{}", "=".repeat(header.len()));
          crate::stats::start_reporter();
       }
@@ -131,18 +131,17 @@ pub async fn go(port: u16) {
             crate::dns::set_id_network_byte_order(id, &mut answer);
             let wrote_len_maybe = listener_socket.send_to(&answer, &client_addr).await;
 
-            if let Ok(wrote_len) = wrote_len_maybe {
-               if wrote_len == 0 {
-                  eprintln!("Failed to write response to the client. 0 bytes written at {}:{}", file!(), line!());
-                  continue;
-               }
-            } else {
+            let Ok(wrote_len) = wrote_len_maybe else {
                eprintln!(
                   "Failed to write cached response to the client with error: {} at {}:{}",
                   wrote_len_maybe.unwrap_err(),
                   file!(),
                   line!()
                );
+               continue;
+            };
+            if wrote_len == 0 {
+               eprintln!("Failed to write response to the client. 0 bytes written at {}:{}", file!(), line!());
                continue;
             }
 
@@ -160,10 +159,7 @@ pub async fn go(port: u16) {
             continue;
          }
 
-         let client_addr_ipv4 = match client_addr {
-            std::net::SocketAddr::V4(value) => value,
-            _ => std::unreachable!(),
-         };
+         let std::net::SocketAddr::V4(client_addr_ipv4) = client_addr else { std::unreachable!() };
          let registration = crate::cache::in_flight_register(
             cache_key,
             udp_segment,
@@ -183,10 +179,7 @@ pub async fn go(port: u16) {
                   eprintln!("Failed to write cached response to the client with error: {err}");
                }
             }
-            crate::cache::InFlightRegistration::Joined => {
-               crate::stats::increment_cache_miss();
-            }
-            crate::cache::InFlightRegistration::PromotedBackground => {
+            crate::cache::InFlightRegistration::Joined | crate::cache::InFlightRegistration::PromotedBackground => {
                crate::stats::increment_cache_miss();
             }
             crate::cache::InFlightRegistration::Overflow => {
@@ -205,7 +198,7 @@ pub async fn go(port: u16) {
                for tx in &tx_channels {
                   match tx.send(query.clone()).await {
                      Ok(_) => (),
-                     Err(err) => panic!("{}", err),
+                     Err(err) => panic!("{err}"),
                   };
                }
             }

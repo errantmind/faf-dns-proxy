@@ -16,7 +16,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Ok(m) => m,
         Err(Error::RuntimeRequirements(msg)) => {
             eprintln!("Cannot start monitoring - runtime requirements not met:");
-            eprintln!("{}", msg);
+            eprintln!("{msg}");
             eprintln!("\nTry running with: sudo cargo run --example simple_usage");
             return Ok(());
         }
@@ -34,9 +34,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Simulate some lookups for example addresses
     let example_addresses = vec![
-        SocketAddrV4::new(Ipv4Addr::new(192, 168, 1, 100), 12345),
-        SocketAddrV4::new(Ipv4Addr::new(10, 0, 0, 50), 54321),
-        SocketAddrV4::new(Ipv4Addr::new(172, 16, 0, 10), 23456),
+        SocketAddrV4::new(Ipv4Addr::new(192, 168, 1, 100), 12_345),
+        SocketAddrV4::new(Ipv4Addr::new(10, 0, 0, 50), 54_321),
+        SocketAddrV4::new(Ipv4Addr::new(172, 16, 0, 10), 23_456),
     ];
 
     println!("\nLooking up DNS request details for example addresses:");
@@ -45,14 +45,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     for _ in 0..10 {
         for addr in &example_addresses {
             if let Some(info) = monitor.lookup_request_details(*addr) {
-                println!("   Found DNS request: {}", info);
+                println!("   Found DNS request: {info}");
             }
         }
 
         // Show cache statistics
         let (cache_len, is_empty) = monitor.cache_stats();
         if !is_empty {
-            println!("   Cache contains {} DNS request entries", cache_len);
+            println!("   Cache contains {cache_len} DNS request entries");
         }
 
         std::thread::sleep(Duration::from_millis(500));

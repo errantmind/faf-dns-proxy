@@ -23,7 +23,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 /// 1232 bytes accommodates most modern DNS responses while generally avoiding
 /// IP fragmentation. Avoids common DNSSEC timeouts. Larger DNS-over-TCP/TLS
 /// responses are consumed and skipped.
-pub const MAX_DNS_MESSAGE_SIZE: usize = 1232;
+pub const MAX_DNS_MESSAGE_SIZE: usize = 1_232;
 
 /// Represents the result of processing a DNS response
 pub struct DnsResponseResult {
@@ -176,8 +176,8 @@ pub fn map_qtype_to_str(qtype: u16) -> &'static str {
       258 => "AVC",
       259 => "DOA",
       260 => "AMTRELAY",
-      32768 => "TA",
-      32769 => "DLV",
+      32_768 => "TA",
+      32_769 => "DLV",
       _ => "UNKNOWN",
    }
 }
@@ -265,7 +265,7 @@ fn skip_dns_name(message: &[u8], mut offset: usize) -> Option<usize> {
 
 #[cold]
 fn ttl_parse_fallback(question: String, qtype: u16, qclass: u16) -> (String, &'static str, &'static str, u64) {
-   eprintln!("          Could not parse answer TTL for {}; using {}s", question, TTL_PARSE_FALLBACK_SECS);
+   eprintln!("          Could not parse answer TTL for {question}; using {TTL_PARSE_FALLBACK_SECS}s");
    (question, map_qtype_to_str(qtype), map_qclass_to_str(qclass), TTL_PARSE_FALLBACK_SECS)
 }
 

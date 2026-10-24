@@ -30,8 +30,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             while running.load(std::sync::atomic::Ordering::Relaxed) {
                 // Poll by doing a dummy lookup - this triggers the ring buffer poll
                 // We use a dummy address that won't match anything
-                let dummy_addr =
-                    std::net::SocketAddrV4::new(std::net::Ipv4Addr::new(255, 255, 255, 255), 65535);
+                let dummy_addr = std::net::SocketAddrV4::new(
+                    std::net::Ipv4Addr::new(255, 255, 255, 255),
+                    65_535,
+                );
                 let _ = monitor.lookup_request_details(dummy_addr);
 
                 // Small delay to avoid excessive CPU usage
@@ -41,7 +43,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if std::env::var("SHOW_CACHE_STATS").is_ok() {
                     let (cache_len, _) = monitor.cache_stats();
                     if cache_len > 0 {
-                        print!("\r[Cache: {} entries] ", cache_len);
+                        print!("\r[Cache: {cache_len} entries] ");
                         io::stdout().flush().unwrap();
                     }
                 }
@@ -52,7 +54,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         Err(Error::RuntimeRequirements(msg)) => {
             eprintln!("❌ Runtime requirements not met:\n");
-            eprintln!("{}", msg);
+            eprintln!("{msg}");
             eprintln!("\n How to fix:");
             eprintln!("  For BTF support:");
             eprintln!(
@@ -64,7 +66,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             std::process::exit(1);
         }
         Err(e) => {
-            eprintln!("Failed to start monitoring: {}", e);
+            eprintln!("Failed to start monitoring: {e}");
             std::process::exit(1);
         }
     }

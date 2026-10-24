@@ -129,7 +129,7 @@ impl UdpPacketInfo {
         let destination_port = if self.flags & 8 != 0 { self.dport } else { 0 };
 
         let latency_us = if self.processing_end_ns > self.processing_start_ns {
-            (self.processing_end_ns - self.processing_start_ns) / 1000
+            (self.processing_end_ns - self.processing_start_ns) / 1_000
         } else {
             0
         };

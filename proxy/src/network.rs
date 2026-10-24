@@ -93,16 +93,15 @@ async fn handle_writes(
    mut shutdown_writer_rx: tokio::sync::oneshot::Receiver<bool>,
 ) -> (kanal::AsyncReceiver<UpstreamQuery>, Option<UpstreamQuery>) {
    // In the event we had an issue previously, we begin by resuming the previous failed request
-   if let Some(unsent_previous_query) = unsent_previous_query_maybe {
-      if let Some(unsent_data) = write(&mut write_half, unsent_previous_query).await {
-         return (msg_rx, Some(unsent_data));
-      }
+   if let Some(unsent_previous_query) = unsent_previous_query_maybe
+      && let Some(unsent_data) = write(&mut write_half, unsent_previous_query).await
+   {
+      return (msg_rx, Some(unsent_data));
    }
 
-   if background_msg_rx.is_none() {
+   let Some(background_msg_rx) = background_msg_rx else {
       return handle_foreground_writes(write_half, msg_rx, shutdown_writer_rx).await;
-   }
-   let background_msg_rx = background_msg_rx.unwrap();
+   };
 
    loop {
       // Drain already-queued foreground work before considering background work.
@@ -286,35 +285,16 @@ async fn handle_reads(
             let saved_addr = in_flight.waiters.first().map(|waiter| waiter.client_addr);
 
             #[cfg(target_os = "linux")]
-            let (client_pid_comm, lookup_method) = if crate::statics::ARGS.client_ident && saved_addr.is_some() {
-               let saved_addr = saved_addr.unwrap();
+            let (client_pid_comm, lookup_method) = if crate::statics::ARGS.client_ident
+               && let Some(saved_addr) = saved_addr
+            {
                // Try eBPF fast path first
-               if !crate::statics::ARGS.force_netlink {
-                  if let Some(manager) = EBPF_CLIENT_MANAGER.get() {
-                     if let Some(client_info) = manager.lookup_client_info(saved_addr) {
-                        (Some((client_info.pid as i32, client_info.process_name)), client_info.lookup_method)
-                     } else {
-                        // Fallback to netlink if eBPF didn't find anything
-                        let socket_info = crate::inspect_client::get_socket_info(&saved_addr);
-                        if let Some(socket_info) = socket_info {
-                           let stat = crate::inspect_client::find_pid_by_socket_inode(socket_info.header.inode as u64);
-                           (stat.map(|s| (s.pid, s.comm)), "NETLINK")
-                        } else {
-                           (None, "NETLINK")
-                        }
-                     }
-                  } else {
-                     // eBPF manager not initialized, fallback to netlink
-                     let socket_info = crate::inspect_client::get_socket_info(&saved_addr);
-                     if let Some(socket_info) = socket_info {
-                        let stat = crate::inspect_client::find_pid_by_socket_inode(socket_info.header.inode as u64);
-                        (stat.map(|s| (s.pid, s.comm)), "NETLINK")
-                     } else {
-                        (None, "NETLINK")
-                     }
-                  }
+               if !crate::statics::ARGS.force_netlink
+                  && let Some(manager) = EBPF_CLIENT_MANAGER.get()
+                  && let Some(client_info) = manager.lookup_client_info(saved_addr)
+               {
+                  (Some((client_info.pid as i32, client_info.process_name)), client_info.lookup_method)
                } else {
-                  // Force netlink mode
                   let socket_info = crate::inspect_client::get_socket_info(&saved_addr);
                   if let Some(socket_info) = socket_info {
                      let stat = crate::inspect_client::find_pid_by_socket_inode(socket_info.header.inode as u64);
@@ -359,7 +339,9 @@ async fn handle_reads(
                }
             }
 
-            if !crate::statics::ARGS.daemon && saved_addr.is_some() {
+            if !crate::statics::ARGS.daemon
+               && let Some(_saved_addr) = saved_addr
+            {
                let (fastest_count, refused_count) = crate::stats::increment_fastest(upstream_dns_index);
                let mut output = format!(
                   "{:>4}ms -> {:<50} {:>7} {:>3} {:>7} {:>15} {:<7} {:>7}",
@@ -369,23 +351,21 @@ async fn handle_reads(
                   dns_response.qclass_str,
                   format!("{}s", dns_response.ttl),
                   format!("{}", crate::statics::DNS_SERVERS[upstream_dns_index].socket_addr.ip()).as_str(),
-                  format!("[{}]", fastest_count),
-                  format!("[{}]", refused_count),
+                  format!("[{fastest_count}]"),
+                  format!("[{refused_count}]"),
                );
 
                #[cfg(target_os = "linux")]
                if crate::statics::ARGS.client_ident {
                   output = format!(
-                     "{} - {} ({}:{}) [{}]",
-                     output,
-                     client_pid_comm.map_or("UNKNOWN".to_string(), |(pid, comm)| format!("{}/{}", pid, comm)),
-                     saved_addr.unwrap().ip(),
-                     saved_addr.unwrap().port(),
-                     lookup_method,
+                     "{output} - {} ({}:{}) [{lookup_method}]",
+                     client_pid_comm.map_or("UNKNOWN".to_string(), |(pid, comm)| format!("{pid}/{comm}")),
+                     _saved_addr.ip(),
+                     _saved_addr.port(),
                   );
                }
 
-               println!("{}", output);
+               println!("{output}");
             }
          }
       }
@@ -396,7 +376,7 @@ async fn connect(
    tls_connector: &tokio_rustls::TlsConnector,
    upstream_dns: &crate::statics::UpstreamDnsServer,
 ) -> tokio_rustls::client::TlsStream<tokio::net::TcpStream> {
-   const CONN_ERROR_SLEEP_MS: u64 = 1000;
+   const CONN_ERROR_SLEEP_MS: u64 = 1_000;
 
    let mut connection_failures = 0;
    let mut tls_failures = 0;
@@ -407,7 +387,7 @@ async fn connect(
          Err(err) => {
             connection_failures += 1;
             if connection_failures > 1 && crate::util::is_power_of_2(connection_failures) {
-               eprintln!("failed {connection_failures}x times connecting to: {} with error: {}", upstream_dns.socket_addr, err);
+               eprintln!("failed {connection_failures}x times connecting to: {} with error: {err}", upstream_dns.socket_addr);
             }
             tokio::time::sleep(tokio::time::Duration::from_millis(CONN_ERROR_SLEEP_MS)).await;
             continue;
@@ -425,7 +405,7 @@ async fn connect(
          Err(err) => {
             tls_failures += 1;
             if tls_failures > 1 && crate::util::is_power_of_2(tls_failures) {
-               eprintln!("failed {tls_failures}x times establishing tls connection to: {} with error: {}", upstream_dns.socket_addr, err);
+               eprintln!("failed {tls_failures}x times establishing tls connection to: {} with error: {err}", upstream_dns.socket_addr);
             }
             tokio::time::sleep(tokio::time::Duration::from_millis(CONN_ERROR_SLEEP_MS)).await;
             continue;

@@ -43,7 +43,7 @@ pub fn get_socket_info(source_socket: &std::net::SocketAddrV4) -> Option<Box<net
    let mut nlsocket = match Socket::new(NETLINK_SOCK_DIAG) {
       Ok(socket) => socket,
       Err(err) => {
-         eprintln!("Failed to create netlink socket: {} at {}:{}", err, file!(), line!());
+         eprintln!("Failed to create netlink socket: {err} at {}:{}", file!(), line!());
          return None;
       }
    };
@@ -51,13 +51,13 @@ pub fn get_socket_info(source_socket: &std::net::SocketAddrV4) -> Option<Box<net
    let _port_number = match nlsocket.bind_auto() {
       Ok(addr) => addr.port_number(),
       Err(err) => {
-         eprintln!("Failed to bind netlink socket: {} at {}:{}", err, file!(), line!());
+         eprintln!("Failed to bind netlink socket: {err} at {}:{}", file!(), line!());
          return None;
       }
    };
 
    if let Err(err) = nlsocket.connect(&SocketAddr::new(0, 0)) {
-      eprintln!("Failed to connect netlink socket: {} at {}:{}", err, file!(), line!());
+      eprintln!("Failed to connect netlink socket: {err} at {}:{}", file!(), line!());
       return None;
    }
 
@@ -91,7 +91,7 @@ pub fn get_socket_info(source_socket: &std::net::SocketAddrV4) -> Option<Box<net
       return None;
    }
 
-   let mut receive_buffer = vec![0; 4096];
+   let mut receive_buffer = vec![0; 4_096];
    let mut offset = 0;
    while let Ok(size) = nlsocket.recv(&mut &mut receive_buffer[..], 0) {
       loop {
@@ -99,7 +99,7 @@ pub fn get_socket_info(source_socket: &std::net::SocketAddrV4) -> Option<Box<net
          let rx_packet = match <NetlinkMessage<SockDiagMessage>>::deserialize(bytes) {
             Ok(packet) => packet,
             Err(err) => {
-               eprintln!("Failed to deserialize netlink message: {} at {}:{}", err, file!(), line!());
+               eprintln!("Failed to deserialize netlink message: {err} at {}:{}", file!(), line!());
                break;
             }
          };
@@ -107,10 +107,7 @@ pub fn get_socket_info(source_socket: &std::net::SocketAddrV4) -> Option<Box<net
          match rx_packet.payload {
             NetlinkPayload::Noop => {}
             NetlinkPayload::InnerMessage(SockDiagMessage::InetResponse(response)) => {
-               let source_ipv4 = match response.header.socket_id.source_address {
-                  std::net::IpAddr::V4(ip) => ip,
-                  _ => unreachable!(),
-               };
+               let std::net::IpAddr::V4(source_ipv4) = response.header.socket_id.source_address else { unreachable!() };
                if &source_ipv4 == source_socket.ip()
                   && response.header.socket_id.source_port == source_socket.port()
                   && response.header.socket_id.destination_port == crate::statics::ARGS.port
@@ -149,7 +146,7 @@ pub fn find_pid_by_socket_inode(inode: u64) -> Option<procfs::process::Stat> {
       let new_procs: Vec<procfs::process::Process> = match procfs::process::all_processes() {
          Ok(procs) => procs.filter_map(Result::ok).collect::<Vec<_>>(),
          Err(err) => {
-            eprintln!("Failed to enumerate processes: {} at {}:{}", err, file!(), line!());
+            eprintln!("Failed to enumerate processes: {err} at {}:{}", file!(), line!());
             return None;
          }
       };
@@ -166,12 +163,11 @@ fn find_stats_for_inode(all_procs: &[procfs::process::Process], inode: u64) -> O
    for process in all_procs.iter() {
       if let (Ok(stat), Ok(fds)) = (process.stat(), process.fd()) {
          for fd in fds {
-            if let Ok(fd_info) = fd {
-               if let procfs::process::FDTarget::Socket(fd_inode) = fd_info.target {
-                  if fd_inode == inode {
-                     return Some(stat);
-                  }
-               }
+            if let Ok(fd_info) = fd
+               && let procfs::process::FDTarget::Socket(fd_inode) = fd_info.target
+               && fd_inode == inode
+            {
+               return Some(stat);
             }
          }
       }

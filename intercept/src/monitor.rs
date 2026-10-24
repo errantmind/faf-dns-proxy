@@ -159,13 +159,9 @@ impl DnsMonitor {
         };
 
         println!(
-            "{:<8} {:<16} {:<15} {:<8} {:<15} {:<8} {:<8} {:<8} {}",
+            "{:<8} {:<16} {saddr_str:<15} {sport_str:<8} {daddr_str:<15} {dport_str:<8} {:<8} {:<8} {}",
             info.pid,
             info.process_name,
-            saddr_str,
-            sport_str,
-            daddr_str,
-            dport_str,
             info.message_length,
             info.latency_us,
             info.process_tree_string()

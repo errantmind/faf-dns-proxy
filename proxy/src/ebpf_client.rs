@@ -69,11 +69,11 @@ impl EbpfClientManager {
                   }
                }
                Err(e) => {
-                  eprintln!("Failed to start eBPF monitoring: {}. Falling back to netlink.", e);
+                  eprintln!("Failed to start eBPF monitoring: {e}. Falling back to netlink.");
                }
             },
             Err(e) => {
-               eprintln!("Failed to create eBPF monitor: {}. Falling back to netlink.", e);
+               eprintln!("Failed to create eBPF monitor: {e}. Falling back to netlink.");
             }
          }
       }
@@ -91,12 +91,11 @@ impl EbpfClientManager {
    pub fn lookup_client_info(&self, _source_addr: SocketAddrV4) -> Option<ClientInfo> {
       #[cfg(all(feature = "ebpf-client-ident", target_arch = "x86_64"))]
       {
-         if let Ok(guard) = self.monitor.lock() {
-            if let Some(ref monitor) = *guard {
-               if let Some(dns_info) = monitor.lookup_request_details(_source_addr) {
-                  return Some(ClientInfo { pid: dns_info.pid, process_name: dns_info.process_name.clone(), lookup_method: "EBPF" });
-               }
-            }
+         if let Ok(guard) = self.monitor.lock()
+            && let Some(ref monitor) = *guard
+            && let Some(dns_info) = monitor.lookup_request_details(_source_addr)
+         {
+            return Some(ClientInfo { pid: dns_info.pid, process_name: dns_info.process_name.clone(), lookup_method: "EBPF" });
          }
       }
 
@@ -108,10 +107,10 @@ impl Drop for EbpfClientManager {
    fn drop(&mut self) {
       #[cfg(all(feature = "ebpf-client-ident", target_arch = "x86_64"))]
       {
-         if let Ok(mut guard) = self.monitor.lock() {
-            if let Some(mut monitor) = guard.take() {
-               monitor.stop_monitoring();
-            }
+         if let Ok(mut guard) = self.monitor.lock()
+            && let Some(mut monitor) = guard.take()
+         {
+            monitor.stop_monitoring();
          }
       }
    }

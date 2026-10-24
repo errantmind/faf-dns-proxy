@@ -61,11 +61,11 @@ pub fn generate_log_chart(latencies: Vec<u64>) -> anyhow::Result<(), Box<dyn std
       .y_axis(charming::component::Axis::new().type_(charming::element::AxisType::Value).name("count"))
       .series(charming::series::Bar::new().data(counts_greater_than_zero));
 
-   let mut renderer = charming::HtmlRenderer::new("latency distribution", 1920, 720);
+   let mut renderer = charming::HtmlRenderer::new("latency distribution", 1_920, 720);
 
    // Save the chart as HTML file.
    let file_path = get_chart_file_path()?;
-   renderer.save(&chart, &file_path).map_err(|e| anyhow::anyhow!("{:?}", e))?;
+   renderer.save(&chart, &file_path).map_err(|e| anyhow::anyhow!("{e:?}"))?;
    println!("chart saved to {:?}", &file_path);
 
    Ok(())

@@ -83,14 +83,14 @@ impl RefreshEvent {
 lazy_static::lazy_static! {
    // Stores questions currently awaiting an upstream response and every client waiting for each answer.
    static ref DNS_IN_FLIGHT: dashmap::DashMap<Vec<u8>, InFlightEntry, rustc_hash::FxBuildHasher> =
-      dashmap::DashMap::with_capacity_and_hasher(4096, rustc_hash::FxBuildHasher::default());
+      dashmap::DashMap::with_capacity_and_hasher(4_096, rustc_hash::FxBuildHasher::default());
 
    // Stores when questions are answered, as well as when they expire and how long it took to answer
    static ref DNS_ANSWER_CACHE: dashmap::DashMap<Vec<u8>, AnswerCacheEntry, rustc_hash::FxBuildHasher> =
-      dashmap::DashMap::with_capacity_and_hasher(4096, rustc_hash::FxBuildHasher::default());
+      dashmap::DashMap::with_capacity_and_hasher(4_096, rustc_hash::FxBuildHasher::default());
 }
 
-const MAX_IN_FLIGHT: usize = 4096;
+const MAX_IN_FLIGHT: usize = 4_096;
 const MAX_WAITERS_PER_FLIGHT: usize = 16_384;
 const IN_FLIGHT_TIMEOUT: tokio::time::Duration = tokio::time::Duration::from_secs(2);
 
@@ -342,11 +342,10 @@ pub fn in_flight_complete(cache_key: &[u8], upstream_id: u16, response: &[u8]) -
       let mut previous_expires_at = None;
       if entry.started_as_background
          && let Some(answer) = DNS_ANSWER_CACHE.get(key)
+         && entry.background_refresh
       {
-         if entry.background_refresh {
-            response_result.elapsed_ms = answer.elapsed_ms;
-            previous_expires_at = Some(answer.expires_at);
-         }
+         response_result.elapsed_ms = answer.elapsed_ms;
+         previous_expires_at = Some(answer.expires_at);
       }
       let generation = NEXT_REFRESH_GENERATION.fetch_add(1, Ordering::Relaxed).wrapping_add(1);
       let refresh_lease_until_ms = DNS_ANSWER_CACHE.get(key).map_or(entry.refresh_lease_until_ms, |answer| {
@@ -452,5 +451,5 @@ pub fn answer_cache_get_for_client(cache_key: &[u8], current_time: tokio::time::
 }
 
 pub fn answer_cache_latencies() -> Vec<u64> {
-   DNS_ANSWER_CACHE.iter().filter(|entry| entry.elapsed_ms <= 8192).map(|entry| entry.elapsed_ms as u64).collect()
+   DNS_ANSWER_CACHE.iter().filter(|entry| entry.elapsed_ms <= 8_192).map(|entry| entry.elapsed_ms as u64).collect()
 }

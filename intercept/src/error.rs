@@ -25,12 +25,12 @@ pub enum Error {
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Error::EbpfError(e) => write!(f, "eBPF error: {}", e),
-            Error::RuntimeRequirements(msg) => write!(f, "Runtime requirements not met: {}", msg),
-            Error::NotRunning => write!(f, "DNS monitor is not running"),
-            Error::AlreadyRunning => write!(f, "DNS monitor is already running"),
-            Error::InvalidConfig(msg) => write!(f, "Invalid configuration: {}", msg),
-            Error::IoError(e) => write!(f, "I/O error: {}", e),
+            Self::EbpfError(e) => write!(f, "eBPF error: {e}"),
+            Self::RuntimeRequirements(msg) => write!(f, "Runtime requirements not met: {msg}"),
+            Self::NotRunning => write!(f, "DNS monitor is not running"),
+            Self::AlreadyRunning => write!(f, "DNS monitor is already running"),
+            Self::InvalidConfig(msg) => write!(f, "Invalid configuration: {msg}"),
+            Self::IoError(e) => write!(f, "I/O error: {e}"),
         }
     }
 }
@@ -38,8 +38,8 @@ impl fmt::Display for Error {
 impl std::error::Error for Error {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Error::EbpfError(e) => Some(&**e),
-            Error::IoError(e) => Some(e),
+            Self::EbpfError(e) => Some(&**e),
+            Self::IoError(e) => Some(e),
             _ => None,
         }
     }
@@ -47,12 +47,12 @@ impl std::error::Error for Error {
 
 impl From<std::io::Error> for Error {
     fn from(err: std::io::Error) -> Self {
-        Error::IoError(err)
+        Self::IoError(err)
     }
 }
 
 impl From<libbpf_rs::Error> for Error {
     fn from(err: libbpf_rs::Error) -> Self {
-        Error::EbpfError(Box::new(err))
+        Self::EbpfError(Box::new(err))
     }
 }
