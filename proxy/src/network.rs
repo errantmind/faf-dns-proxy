@@ -260,23 +260,23 @@ async fn handle_reads(
 
       let udp_segment_no_tcp_prefix = &response_buf[..udp_segment_len];
 
-      if crate::dns::check_for_usable_response(udp_segment_no_tcp_prefix) != Some(true) {
-         // Keep the flight open so another upstream can still return a usable NOERROR or NXDOMAIN response.
-         eprintln!(
-            "Upstream DNS server {} returned an unusable or malformed response",
-            crate::statics::DNS_SERVERS[upstream_dns_index].socket_addr
-         );
-         crate::stats::increment_refused(upstream_dns_index);
-         continue;
-      }
+      let completion = {
+         let Some(question) = crate::dns::ParsedQuestion::parse_response(udp_segment_no_tcp_prefix) else {
+            // Keep the flight open so another upstream can still return a usable NOERROR or NXDOMAIN response.
+            eprintln!(
+               "Upstream DNS server {} returned an unusable or malformed response",
+               crate::statics::DNS_SERVERS[upstream_dns_index].socket_addr
+            );
+            crate::stats::increment_refused(upstream_dns_index);
+            continue;
+         };
+         // Atomically remove the in-flight query so only the first usable response is processed.
+         crate::cache::in_flight_complete(&question)
+      };
 
       // Scope for guards
       {
-         let id = crate::dns::get_id_network_byte_order(udp_segment_no_tcp_prefix.as_ptr(), udp_segment_no_tcp_prefix.len());
-         let cache_key = crate::dns::get_query_unique_id(udp_segment_no_tcp_prefix.as_ptr(), udp_segment_no_tcp_prefix.len());
-
-         // Atomically remove the in-flight query so only the first usable response is processed.
-         if let Some(completion) = crate::cache::in_flight_complete(cache_key, id, udp_segment_no_tcp_prefix) {
+         if let Some(completion) = completion {
             if let Some(refresh_event) = completion.refresh_event {
                crate::refresh::schedule(refresh_event);
             }

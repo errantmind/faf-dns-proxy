@@ -324,9 +324,12 @@ pub struct InFlightCompletion {
    pub refresh_event: Option<RefreshEvent>,
 }
 
-pub fn in_flight_complete(cache_key: &[u8], upstream_id: u16, response: &[u8]) -> Option<InFlightCompletion> {
+pub fn in_flight_complete(question: &crate::dns::ParsedQuestion<'_>) -> Option<InFlightCompletion> {
    use std::sync::atomic::Ordering;
 
+   let cache_key = question.cache_key();
+   let upstream_id = question.id();
+   let response = question.message();
    let mut dns_response = None;
    let mut completed_generation = 0;
    let mut completed_expires_at = None;
@@ -335,7 +338,7 @@ pub fn in_flight_complete(cache_key: &[u8], upstream_id: u16, response: &[u8]) -
          return false;
       }
 
-      let mut response_result = crate::dns::process_dns_response(response, Some(entry.asked_at));
+      let mut response_result = crate::dns::process_dns_response(question, Some(entry.asked_at));
       let mut previous_expires_at = None;
       if entry.started_as_background
          && let Some(answer) = DNS_ANSWER_CACHE.get(key)

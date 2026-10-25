@@ -81,7 +81,7 @@ pub async fn go(port: u16) {
       }
 
       // Reserve 2 bytes for the DNS-over-TCP length prefix.
-      let mut query_buf = vec![0; crate::dns::MAX_DNS_MESSAGE_SIZE + 2];
+      let mut query_buf = vec![0; crate::dns::MAX_DNS_MESSAGE_SIZE + 3];
 
       // Print header for DNS output when not in daemon mode
       if !crate::statics::ARGS.daemon {
@@ -114,11 +114,17 @@ pub async fn go(port: u16) {
             }
          };
          let received_at = tokio::time::Instant::now();
-         assert!(read_bytes <= crate::dns::MAX_DNS_MESSAGE_SIZE, "Received an oversized datagram on the UDP socket");
+         if read_bytes > crate::dns::MAX_DNS_MESSAGE_SIZE {
+            continue;
+         }
          let udp_segment = &mut query_buf[2..read_bytes + 2];
-
-         let id = crate::dns::get_id_network_byte_order(udp_segment.as_ptr(), udp_segment.len());
-         let cache_key = crate::dns::get_query_unique_id(udp_segment.as_ptr(), udp_segment.len());
+         let (id, cache_key) = {
+            let Some(question) = crate::dns::ParsedQuestion::parse(udp_segment) else {
+               continue;
+            };
+            let cache_key = question.cache_key();
+            (question.id(), cache_key)
+         };
          let current_time = tokio::time::Instant::now();
 
          // First check the ANSWER cache and respond immediately if we already have an answer to the query.

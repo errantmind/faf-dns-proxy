@@ -35,13 +35,13 @@ pub struct DnsResponseResult {
 }
 
 /// Processes a DNS response and extracts all necessary information for caching and logging
-pub fn process_dns_response(udp_segment: &[u8], asked_at_opt: Option<u128>) -> DnsResponseResult {
+pub fn process_dns_response(question: &ParsedQuestion<'_>, asked_at_opt: Option<u128>) -> DnsResponseResult {
    let elapsed_ms = match asked_at_opt {
       Some(asked_at) => crate::util::get_unix_ts_millis() - asked_at,
       None => 0,
    };
 
-   let (site_name, qtype_str, qclass_str, mut ttl) = get_question_as_string_and_lowest_ttl(udp_segment.as_ptr(), udp_segment.len());
+   let (site_name, qtype_str, qclass_str, mut ttl) = get_question_as_string_and_lowest_ttl(question);
    // Apply minimum TTL override
    if ttl < crate::statics::MINIMUM_TTL_OVERRIDE {
       ttl = crate::statics::MINIMUM_TTL_OVERRIDE;
@@ -99,15 +99,8 @@ pub fn create_servfail_response(dns_buf: &mut [u8]) -> Option<()> {
 }
 
 #[inline]
-pub fn get_id_network_byte_order(dns_buf_start: *const u8, len: usize) -> u16 {
-   debug_assert!(len >= 2);
-   unsafe { std::ptr::read_unaligned(dns_buf_start.cast::<u16>()) }
-}
-
-#[inline]
 pub fn set_id_network_byte_order(new_id: u16, input: &mut [u8]) {
-   debug_assert!(input.len() >= 2);
-   unsafe { std::ptr::write_unaligned(input.as_mut_ptr().cast::<u16>(), new_id) };
+   input[..2].copy_from_slice(&new_id.to_ne_bytes());
 }
 
 #[inline]
@@ -194,37 +187,54 @@ pub fn map_qclass_to_str(qclass: u16) -> &'static str {
    }
 }
 
-/// Walks one question in the query (QNAME, QTYPE, QCLASS) and returns these bytes a slice of the buffer
-#[inline]
-pub fn get_query_unique_id<'a>(dns_buf_start: *const u8, len: usize) -> &'a [u8] {
-   // The shortest query is for the root zone '.'. So Header (12 byets) + QNAME (3 bytes) + QTYPE (2 bytes) + QCLASS (2 bytes)
-   const SHORTEST_POSSIBLE_QUESTION_BYTES: usize = 19;
-   debug_assert!(len >= SHORTEST_POSSIBLE_QUESTION_BYTES);
+pub struct ParsedQuestion<'a> {
+   message: &'a [u8],
+   question_end: usize,
+}
 
-   unsafe {
-      // The number of questions is 2 bytes. We only support queries with a single question
-      debug_assert!(*dns_buf_start.add(4) == 0u8, "More than one question per query is non-standard and unsupported");
-      debug_assert!(*dns_buf_start.add(5) == 1u8, "More than one question per query is non-standard and unsupported");
-
-      //println!("{}", get_question_as_string(dns_buf_start, len));
-
-      // Skip the header
-      let mut dns_qname_qtype_qclass_walker = dns_buf_start.add(12);
-
-      const QNAME_TERMINATOR_QTYPE_QCLASS_LEN: usize = 5;
-      let mut num_question_bytes: usize = 0;
-      {
-         const QNAME_TERMINATOR: u8 = 0;
-         let dns_buf_end = dns_buf_start.add(len);
-         while *dns_qname_qtype_qclass_walker != QNAME_TERMINATOR && dns_qname_qtype_qclass_walker != dns_buf_end {
-            num_question_bytes += 1;
-            dns_qname_qtype_qclass_walker = dns_qname_qtype_qclass_walker.add(1);
-         }
-
-         debug_assert!((dns_buf_end as usize - dns_qname_qtype_qclass_walker as usize) >= QNAME_TERMINATOR_QTYPE_QCLASS_LEN);
+impl<'a> ParsedQuestion<'a> {
+   #[inline]
+   pub fn parse(message: &'a [u8]) -> Option<Self> {
+      if message.len() < 17 || message[4..6] != [0, 1] {
+         return None;
       }
 
-      core::slice::from_raw_parts(dns_buf_start.add(12), num_question_bytes + QNAME_TERMINATOR_QTYPE_QCLASS_LEN)
+      let prefix = &message[..(message.len() - 4).min(12 + 255)];
+      let mut offset = 12;
+      loop {
+         let &length = prefix.get(offset)?;
+         if length == 0 {
+            return Some(Self { message, question_end: offset + 5 });
+         }
+         if length > 63 {
+            return None;
+         }
+         offset += usize::from(length) + 1;
+      }
+   }
+
+   #[inline]
+   pub fn parse_response(message: &'a [u8]) -> Option<Self> {
+      let question = Self::parse(message)?;
+      if message[2] & 0b1000_0000 == 0 || !matches!(message[3] & 0b0000_1111, 0 | 3) {
+         return None;
+      }
+      Some(question)
+   }
+
+   #[inline]
+   pub fn id(&self) -> u16 {
+      u16::from_ne_bytes(*self.message.first_chunk::<2>().unwrap())
+   }
+
+   #[inline]
+   pub fn cache_key(&self) -> &'a [u8] {
+      &self.message[12..][..self.question_end - 12]
+   }
+
+   #[inline]
+   pub fn message(&self) -> &'a [u8] {
+      self.message
    }
 }
 
@@ -269,96 +279,74 @@ fn ttl_parse_fallback(question: String, qtype: u16, qclass: u16) -> (String, &'s
    (question, map_qtype_to_str(qtype), map_qclass_to_str(qclass), TTL_PARSE_FALLBACK_SECS)
 }
 
-#[inline]
-pub fn get_question_as_string_and_lowest_ttl(dns_buf_start: *const u8, len: usize) -> (String, &'static str, &'static str, u64) {
-   let mut question_str = String::new();
-   unsafe {
-      const QNAME_TERMINATOR: u8 = 0;
-      let dns_buf_end = dns_buf_start.add(len);
-      let dns_message = core::slice::from_raw_parts(dns_buf_start, len);
+#[cold]
+fn append_escaped_label(output: &mut String, label: &[u8]) {
+   use std::fmt::Write;
 
-      // Get the number of answers
-      let mut dns_qname_qtype_qclass_walker = dns_buf_start.add(6);
-      debug_assert!(dns_qname_qtype_qclass_walker.add(2) <= dns_buf_end);
-      let num_answers = u16::from_be_bytes([*dns_qname_qtype_qclass_walker, *dns_qname_qtype_qclass_walker.add(1)]);
-
-      // Skip the header
-      dns_qname_qtype_qclass_walker = dns_qname_qtype_qclass_walker.add(6);
-
-      while *dns_qname_qtype_qclass_walker != QNAME_TERMINATOR && dns_qname_qtype_qclass_walker != dns_buf_end {
-         let segment_len = *dns_qname_qtype_qclass_walker as usize;
-         if !question_str.is_empty() {
-            question_str.push('.');
-         }
-         question_str
-            .push_str(std::str::from_utf8(core::slice::from_raw_parts(dns_qname_qtype_qclass_walker.add(1), segment_len)).unwrap());
-         dns_qname_qtype_qclass_walker = dns_qname_qtype_qclass_walker.add(1 + segment_len);
+   for &byte in label {
+      if (b' '..=b'~').contains(&byte) && !matches!(byte, b'.' | b'\\') {
+         output.push(char::from(byte));
+      } else {
+         write!(output, "\\{byte:03}").unwrap();
       }
-
-      // Skip QNAME terminator.
-      dns_qname_qtype_qclass_walker = dns_qname_qtype_qclass_walker.add(1);
-
-      let qtype = u16::from_be_bytes([*dns_qname_qtype_qclass_walker, *dns_qname_qtype_qclass_walker.add(1)]);
-      dns_qname_qtype_qclass_walker = dns_qname_qtype_qclass_walker.add(2);
-
-      let qclass = u16::from_be_bytes([*dns_qname_qtype_qclass_walker, *dns_qname_qtype_qclass_walker.add(1)]);
-      dns_qname_qtype_qclass_walker = dns_qname_qtype_qclass_walker.add(2);
-
-      if num_answers == 0 {
-         return (question_str, map_qtype_to_str(qtype), map_qclass_to_str(qclass), 0);
-      }
-
-      let mut answer_offset = dns_qname_qtype_qclass_walker.offset_from(dns_buf_start) as usize;
-      let mut ttl = u32::MAX;
-
-      for _ in 0..num_answers {
-         let Some(fixed_fields_offset) = skip_dns_name(dns_message, answer_offset) else {
-            return ttl_parse_fallback(question_str, qtype, qclass);
-         };
-         let Some(fixed_fields_end) = fixed_fields_offset.checked_add(10) else {
-            return ttl_parse_fallback(question_str, qtype, qclass);
-         };
-         let Some(fixed_fields) = dns_message.get(fixed_fields_offset..fixed_fields_end) else {
-            return ttl_parse_fallback(question_str, qtype, qclass);
-         };
-
-         let latest_ttl = u32::from_be_bytes(fixed_fields[4..8].try_into().unwrap());
-         ttl = ttl.min(latest_ttl);
-
-         let rdlength = u16::from_be_bytes(fixed_fields[8..10].try_into().unwrap()) as usize;
-         let Some(next_answer_offset) = fixed_fields_end.checked_add(rdlength) else {
-            return ttl_parse_fallback(question_str, qtype, qclass);
-         };
-         if next_answer_offset > dns_message.len() {
-            return ttl_parse_fallback(question_str, qtype, qclass);
-         }
-         answer_offset = next_answer_offset;
-      }
-
-      (question_str, map_qtype_to_str(qtype), map_qclass_to_str(qclass), ttl as u64)
    }
 }
 
 #[inline]
-pub fn check_for_usable_response(dns_buf: &[u8]) -> Option<bool> {
-   if dns_buf.len() < 17 || dns_buf[2] & 0b1000_0000 == 0 || dns_buf[4..6] != [0, 1] {
-      return None;
+pub fn get_question_as_string_and_lowest_ttl(question: &ParsedQuestion<'_>) -> (String, &'static str, &'static str, u64) {
+   let dns_message = question.message;
+   let mut name = &dns_message[12..question.question_end - 5];
+   let mut question_str = String::with_capacity(name.len());
+   while let Some((&length, tail)) = name.split_first() {
+      let (label, rest) = tail.split_at(usize::from(length));
+      if !question_str.is_empty() {
+         question_str.push('.');
+      }
+      if let Ok(text) = std::str::from_utf8(label)
+         && !text.chars().any(|character| character.is_control() || matches!(character, '.' | '\\'))
+      {
+         question_str.push_str(text);
+      } else {
+         append_escaped_label(&mut question_str, label);
+      }
+      name = rest;
    }
 
-   let mut qname_offset = 12;
-   loop {
-      let label_len = *dns_buf.get(qname_offset)? as usize;
-      if label_len == 0 {
-         if qname_offset + 5 > dns_buf.len() {
-            return None;
-         }
-         break;
-      }
-      if label_len > 63 || qname_offset + label_len + 1 >= dns_buf.len() {
-         return None;
-      }
-      qname_offset += label_len + 1;
+   let num_answers = u16::from_be_bytes([dns_message[6], dns_message[7]]);
+   let question_fields = &dns_message[question.question_end - 4..question.question_end];
+   let qtype = u16::from_be_bytes([question_fields[0], question_fields[1]]);
+   let qclass = u16::from_be_bytes([question_fields[2], question_fields[3]]);
+
+   if num_answers == 0 {
+      return (question_str, map_qtype_to_str(qtype), map_qclass_to_str(qclass), 0);
    }
 
-   Some(matches!(dns_buf[3] & 0b0000_1111, 0 | 3))
+   let mut answer_offset = question.question_end;
+   let mut ttl = u32::MAX;
+
+   for _ in 0..num_answers {
+      let Some(fixed_fields_offset) = skip_dns_name(dns_message, answer_offset) else {
+         return ttl_parse_fallback(question_str, qtype, qclass);
+      };
+      let Some(fixed_fields_end) = fixed_fields_offset.checked_add(10) else {
+         return ttl_parse_fallback(question_str, qtype, qclass);
+      };
+      let Some(fixed_fields) = dns_message.get(fixed_fields_offset..fixed_fields_end) else {
+         return ttl_parse_fallback(question_str, qtype, qclass);
+      };
+
+      let latest_ttl = u32::from_be_bytes(fixed_fields[4..8].try_into().unwrap());
+      ttl = ttl.min(latest_ttl);
+
+      let rdlength = u16::from_be_bytes(fixed_fields[8..10].try_into().unwrap()) as usize;
+      let Some(next_answer_offset) = fixed_fields_end.checked_add(rdlength) else {
+         return ttl_parse_fallback(question_str, qtype, qclass);
+      };
+      if next_answer_offset > dns_message.len() {
+         return ttl_parse_fallback(question_str, qtype, qclass);
+      }
+      answer_offset = next_answer_offset;
+   }
+
+   (question_str, map_qtype_to_str(qtype), map_qclass_to_str(qclass), ttl as u64)
 }
