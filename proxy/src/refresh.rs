@@ -22,7 +22,7 @@ use std::sync::Arc;
 
 #[derive(Eq)]
 struct ScheduledRefresh {
-   cache_key: Vec<u8>,
+   cache_key: crate::cache::CacheKey,
    generation: u64,
    due_at: tokio::time::Instant,
 }
@@ -45,7 +45,7 @@ impl PartialEq for ScheduledRefresh {
    }
 }
 
-type ArmedRefreshes = HashMap<Vec<u8>, (tokio::time::Instant, u64), rustc_hash::FxBuildHasher>;
+type ArmedRefreshes = HashMap<crate::cache::CacheKey, (tokio::time::Instant, u64), rustc_hash::FxBuildHasher>;
 
 static REFRESH_TX: once_cell::sync::OnceCell<kanal::AsyncSender<crate::cache::RefreshEvent>> = once_cell::sync::OnceCell::new();
 

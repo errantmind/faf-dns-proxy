@@ -53,12 +53,17 @@ pub async fn go(port: u16) {
                      crate::refresh::schedule(refresh_event);
                   }
                   let entry = expired.entry;
-                  let mut response = entry.query_template;
-                  crate::dns::create_servfail_response(&mut response);
                   let mut waiters = entry.waiters.into_iter();
                   let Some(first_waiter) = waiters.next() else {
                      continue;
                   };
+                  let mut response = entry.query_template;
+                  let question_len = response.len() - 12;
+                  response.resize(response.len() + entry.settings.map_or(0, crate::dns::QuerySettings::opt_len), 0);
+                  let Some(response_len) = crate::dns::create_servfail_response(&mut response, question_len, entry.settings) else {
+                     continue;
+                  };
+                  response.truncate(response_len);
                   crate::dns::set_id_network_byte_order(first_waiter.client_id, &mut response);
                   if let Err(err) = listener_socket.send_to(&response, first_waiter.client_addr).await {
                      eprintln!("Failed to send timed out response to the client with error: {err}");
@@ -118,18 +123,20 @@ pub async fn go(port: u16) {
             continue;
          }
          let udp_segment = &mut query_buf[2..read_bytes + 2];
-         let (id, cache_key) = {
+         let (id, question, settings) = {
             let Some(question) = crate::dns::ParsedQuestion::parse(udp_segment) else {
                continue;
             };
-            let cache_key = question.cache_key();
-            (question.id(), cache_key)
+            (question.id(), question.cache_key(), question.settings())
          };
          let current_time = tokio::time::Instant::now();
 
          // First check the ANSWER cache and respond immediately if we already have an answer to the query.
          // Scheduling is nonblocking; a full refresh queue never delays the cache-hit path.
-         if let Some(cached_response) = crate::cache::answer_cache_get_for_client(cache_key, current_time) {
+         if let Some(settings) = settings
+            && let Some(cached_response) =
+               crate::cache::answer_cache_get_for_client(&crate::cache::CacheKeyRef { question, settings }, current_time)
+         {
             if let Some(refresh_event) = cached_response.refresh_event {
                crate::refresh::schedule(refresh_event);
             }
@@ -168,7 +175,8 @@ pub async fn go(port: u16) {
 
          let std::net::SocketAddr::V4(client_addr_ipv4) = client_addr else { std::unreachable!() };
          let registration = crate::cache::in_flight_register(
-            cache_key,
+            question,
+            settings,
             udp_segment,
             crate::cache::InFlightWaiter { client_addr: client_addr_ipv4, client_id: id, received_at },
             current_time,
@@ -191,8 +199,11 @@ pub async fn go(port: u16) {
             }
             crate::cache::InFlightRegistration::Overflow => {
                crate::stats::increment_cache_miss();
-               crate::dns::create_servfail_response(udp_segment);
-               if let Err(err) = listener_socket.send_to(udp_segment, client_addr_ipv4).await {
+               let question_len = question.len();
+               let Some(response_len) = crate::dns::create_servfail_response(udp_segment, question_len, settings) else {
+                  continue;
+               };
+               if let Err(err) = listener_socket.send_to(&udp_segment[..response_len], client_addr_ipv4).await {
                   eprintln!("Failed to send overloaded response to the client with error: {err}");
                }
             }

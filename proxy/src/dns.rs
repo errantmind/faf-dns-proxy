@@ -32,22 +32,32 @@ pub struct DnsResponseResult {
    pub qclass_str: &'static str,
    pub ttl: u64,
    pub elapsed_ms: u128,
+   pub cache_layout: Option<ResponseCacheLayout>,
+}
+
+#[derive(Clone, Copy)]
+pub struct ResponseCacheLayout {
+   pub opt_offset: Option<u16>,
 }
 
 /// Processes a DNS response and extracts all necessary information for caching and logging
-pub fn process_dns_response(question: &ParsedQuestion<'_>, asked_at_opt: Option<u128>) -> DnsResponseResult {
+pub fn process_dns_response(
+   question: &ParsedQuestion<'_>,
+   asked_at_opt: Option<u128>,
+   settings: Option<QuerySettings>,
+) -> DnsResponseResult {
    let elapsed_ms = match asked_at_opt {
       Some(asked_at) => crate::util::get_unix_ts_millis() - asked_at,
       None => 0,
    };
 
-   let (site_name, qtype_str, qclass_str, mut ttl) = get_question_as_string_and_lowest_ttl(question);
+   let mut result = get_question_as_string_and_lowest_ttl(question, settings);
    // Apply minimum TTL override
-   if ttl < crate::statics::MINIMUM_TTL_OVERRIDE {
-      ttl = crate::statics::MINIMUM_TTL_OVERRIDE;
+   if result.ttl < crate::statics::MINIMUM_TTL_OVERRIDE {
+      result.ttl = crate::statics::MINIMUM_TTL_OVERRIDE;
    }
-
-   DnsResponseResult { site_name, qtype_str, qclass_str, ttl, elapsed_ms }
+   result.elapsed_ms = elapsed_ms;
+   result
 }
 
 /// Creates a cache entry from a processed DNS response.
@@ -58,8 +68,14 @@ pub fn create_cache_entry_from_response(
    previous_expires_at: Option<tokio::time::Instant>,
    refresh_lease_until_ms: u64,
 ) -> crate::cache::AnswerCacheEntry {
+   let opt_offset = response_result.cache_layout.and_then(|layout| layout.opt_offset);
+   let mut answer = udp_segment.to_vec();
+   if let Some(offset) = opt_offset {
+      answer[usize::from(offset)..usize::from(offset) + 11].fill(0);
+   }
    crate::cache::AnswerCacheEntry {
-      answer: udp_segment.to_vec(),
+      answer,
+      opt_offset,
       elapsed_ms: response_result.elapsed_ms,
       expires_at: tokio::time::Instant::now() + std::time::Duration::from_secs(response_result.ttl),
       previous_expires_at,
@@ -69,33 +85,64 @@ pub fn create_cache_entry_from_response(
    }
 }
 
-/// Converts the saved question prefix of a DNS response into a reusable query.
-#[inline]
-pub fn create_refresh_query(response: &[u8], question_len: usize) -> Option<Vec<u8>> {
-   let query_len = 12usize.checked_add(question_len)?;
-   let mut query = response.get(..query_len)?.to_vec();
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct QuerySettings(u64);
 
-   // Keep RD/CD from the original request semantics represented in the response,
-   // clear response-only flags/RCODE, and restore a one-question query header.
-   query[2] &= 0b0000_0001;
-   query[3] &= 0b0001_0000;
-   query[4..6].copy_from_slice(&1u16.to_be_bytes());
-   query[6..12].fill(0);
-   Some(query)
+impl QuerySettings {
+   #[inline]
+   pub fn opt_len(self) -> usize {
+      if self.0 & (1 << 32) != 0 { 11 } else { 0 }
+   }
+
+   #[inline]
+   fn udp_payload(self) -> u16 {
+      if self.opt_len() == 0 { 512 } else { ((self.0 >> 16) as u16).max(512) }
+   }
+
+   #[inline]
+   fn opt(self, payload: u16) -> [u8; 11] {
+      let size = payload.to_be_bytes();
+      [0, 0, 41, size[0], size[1], 0, 0, if self.0 & (1 << 33) != 0 { 0x80 } else { 0 }, 0, 0, 0]
+   }
+
+   #[inline]
+   pub fn write_response_opt(self, output: &mut [u8]) {
+      output.copy_from_slice(&self.opt(MAX_DNS_MESSAGE_SIZE as u16));
+   }
 }
 
 #[inline]
-pub fn create_servfail_response(dns_buf: &mut [u8]) -> Option<()> {
-   if dns_buf.len() < 12 {
+pub fn create_refresh_query(question: &[u8], settings: QuerySettings, upstream_id: u16) -> Vec<u8> {
+   let mut query = Vec::with_capacity(12 + question.len() + settings.opt_len());
+   query.extend_from_slice(&upstream_id.to_ne_bytes());
+   query.extend_from_slice(&(settings.0 as u16).to_be_bytes());
+   query.extend_from_slice(&[0, 1, 0, 0, 0, 0, 0, u8::from(settings.opt_len() != 0)]);
+   query.extend_from_slice(question);
+   if settings.opt_len() != 0 {
+      query.extend_from_slice(&settings.opt((settings.0 >> 16) as u16));
+   }
+   query
+}
+
+#[inline]
+pub fn create_servfail_response(dns_buf: &mut [u8], question_len: usize, settings: Option<QuerySettings>) -> Option<usize> {
+   let question_end = 12usize.checked_add(question_len)?;
+   let response_len = question_end.checked_add(settings.map_or(0, QuerySettings::opt_len))?;
+   let response = dns_buf.get_mut(..response_len)?;
+   if question_len < 5 {
       return None;
    }
 
-   // Set QR and RA, clear answer/authority/additional counts, and set RCODE to SERVFAIL.
-   dns_buf[2] |= 0b1000_0000;
-   dns_buf[3] = (dns_buf[3] & 0b0001_0000) | 0b1000_0010;
-   dns_buf[6..12].fill(0);
-
-   Some(())
+   response[2] = (response[2] & 0b0111_1001) | 0b1000_0000;
+   response[3] = (response[3] & 0b0001_0000) | 0b1000_0010;
+   response[6..12].fill(0);
+   if let Some(settings) = settings
+      && settings.opt_len() != 0
+   {
+      response[11] = 1;
+      settings.write_response_opt(&mut response[question_end..]);
+   }
+   Some(response_len)
 }
 
 #[inline]
@@ -236,6 +283,33 @@ impl<'a> ParsedQuestion<'a> {
    pub fn message(&self) -> &'a [u8] {
       self.message
    }
+
+   #[inline]
+   pub fn settings(&self) -> Option<QuerySettings> {
+      let message = self.message;
+      let flags = u16::from_be_bytes([message[2], message[3]]);
+      if flags & !0x0130 != 0 || message[6..10] != [0; 4] {
+         return None;
+      }
+      let qtype = u16::from_be_bytes([message[self.question_end - 4], message[self.question_end - 3]]);
+      if matches!(qtype, 249..=252) {
+         return None;
+      }
+      if message[10..12] == [0, 0] && self.question_end == message.len() {
+         return Some(QuerySettings(u64::from(flags)));
+      }
+      let opt = &message[self.question_end..];
+      if message[10..12] != [0, 1]
+         || opt.len() != 11
+         || opt[..3] != [0, 0, 41]
+         || u32::from_be_bytes(opt[5..9].try_into().unwrap()) & !0x8000 != 0
+         || opt[9..11] != [0, 0]
+      {
+         return None;
+      }
+      let payload = u16::from_be_bytes([opt[3], opt[4]]);
+      Some(QuerySettings(u64::from(flags) | (u64::from(payload) << 16) | (1 << 32) | (u64::from(opt[7] >> 7) << 33)))
+   }
 }
 
 const TTL_PARSE_FALLBACK_SECS: u64 = 10;
@@ -274,9 +348,21 @@ fn skip_dns_name(message: &[u8], mut offset: usize) -> Option<usize> {
 }
 
 #[cold]
-fn ttl_parse_fallback(question: String, qtype: u16, qclass: u16) -> (String, &'static str, &'static str, u64) {
-   eprintln!("          Could not parse answer TTL for {question}; using {TTL_PARSE_FALLBACK_SECS}s");
-   (question, map_qtype_to_str(qtype), map_qclass_to_str(qclass), TTL_PARSE_FALLBACK_SECS)
+fn ttl_parse_fallback(mut response: DnsResponseResult) -> DnsResponseResult {
+   eprintln!("          Could not parse answer TTL for {}; using {TTL_PARSE_FALLBACK_SECS}s", response.site_name);
+   response.ttl = TTL_PARSE_FALLBACK_SECS;
+   response.cache_layout = None;
+   response
+}
+
+#[inline]
+fn record_fields(message: &[u8], offset: usize) -> Option<(usize, &[u8], usize)> {
+   let fixed_offset = skip_dns_name(message, offset)?;
+   let fixed_end = fixed_offset.checked_add(10)?;
+   let fields = message.get(fixed_offset..fixed_end)?;
+   let rdlength = usize::from(u16::from_be_bytes(fields[8..10].try_into().unwrap()));
+   let next_offset = fixed_end.checked_add(rdlength)?;
+   (next_offset <= message.len()).then_some((fixed_offset, fields, next_offset))
 }
 
 #[cold]
@@ -293,7 +379,7 @@ fn append_escaped_label(output: &mut String, label: &[u8]) {
 }
 
 #[inline]
-pub fn get_question_as_string_and_lowest_ttl(question: &ParsedQuestion<'_>) -> (String, &'static str, &'static str, u64) {
+pub fn get_question_as_string_and_lowest_ttl(question: &ParsedQuestion<'_>, settings: Option<QuerySettings>) -> DnsResponseResult {
    let dns_message = question.message;
    let mut name = &dns_message[12..question.question_end - 5];
    let mut question_str = String::with_capacity(name.len());
@@ -317,36 +403,63 @@ pub fn get_question_as_string_and_lowest_ttl(question: &ParsedQuestion<'_>) -> (
    let qtype = u16::from_be_bytes([question_fields[0], question_fields[1]]);
    let qclass = u16::from_be_bytes([question_fields[2], question_fields[3]]);
 
-   if num_answers == 0 {
-      return (question_str, map_qtype_to_str(qtype), map_qclass_to_str(qclass), 0);
-   }
-
-   let mut answer_offset = question.question_end;
+   let mut result = DnsResponseResult {
+      site_name: question_str,
+      qtype_str: map_qtype_to_str(qtype),
+      qclass_str: map_qclass_to_str(qclass),
+      ttl: 0,
+      elapsed_ms: 0,
+      cache_layout: None,
+   };
+   let mut cacheable = settings.is_some_and(|settings| dns_message.len() <= usize::from(settings.udp_payload()))
+      && dns_message.len() <= MAX_DNS_MESSAGE_SIZE
+      && dns_message[2] & 0b0111_1010 == 0;
+   let counts = [
+      num_answers,
+      if cacheable { u16::from_be_bytes([dns_message[8], dns_message[9]]) } else { 0 },
+      if cacheable { u16::from_be_bytes([dns_message[10], dns_message[11]]) } else { 0 },
+   ];
+   let mut offset = question.question_end;
    let mut ttl = u32::MAX;
+   let mut opt_offset = None;
 
-   for _ in 0..num_answers {
-      let Some(fixed_fields_offset) = skip_dns_name(dns_message, answer_offset) else {
-         return ttl_parse_fallback(question_str, qtype, qclass);
-      };
-      let Some(fixed_fields_end) = fixed_fields_offset.checked_add(10) else {
-         return ttl_parse_fallback(question_str, qtype, qclass);
-      };
-      let Some(fixed_fields) = dns_message.get(fixed_fields_offset..fixed_fields_end) else {
-         return ttl_parse_fallback(question_str, qtype, qclass);
-      };
-
-      let latest_ttl = u32::from_be_bytes(fixed_fields[4..8].try_into().unwrap());
-      ttl = ttl.min(latest_ttl);
-
-      let rdlength = u16::from_be_bytes(fixed_fields[8..10].try_into().unwrap()) as usize;
-      let Some(next_answer_offset) = fixed_fields_end.checked_add(rdlength) else {
-         return ttl_parse_fallback(question_str, qtype, qclass);
-      };
-      if next_answer_offset > dns_message.len() {
-         return ttl_parse_fallback(question_str, qtype, qclass);
+   for (section, count) in counts.into_iter().enumerate() {
+      for _ in 0..count {
+         let Some((fixed_offset, fields, next_offset)) = record_fields(dns_message, offset) else {
+            return if section == 0 { ttl_parse_fallback(result) } else { result };
+         };
+         if section == 0 {
+            ttl = ttl.min(u32::from_be_bytes(fields[4..8].try_into().unwrap()));
+         }
+         if cacheable {
+            let kind = u16::from_be_bytes([fields[0], fields[1]]);
+            if kind == 41 {
+               if section != 2
+                  || opt_offset.is_some()
+                  || fixed_offset != offset + 1
+                  || dns_message[offset] != 0
+                  || fields[8..10] != [0, 0]
+                  || u32::from_be_bytes(fields[4..8].try_into().unwrap()) & !0x8000 != 0
+               {
+                  cacheable = false;
+               }
+               opt_offset = Some(offset as u16);
+            } else if kind == 250 || (kind == 24 && section == 2) {
+               cacheable = false;
+            }
+         }
+         offset = next_offset;
       }
-      answer_offset = next_answer_offset;
+      if section == 0 && num_answers > 0 {
+         result.ttl = u64::from(ttl);
+      }
+      if !cacheable {
+         return result;
+      }
    }
 
-   (question_str, map_qtype_to_str(qtype), map_qclass_to_str(qclass), ttl as u64)
+   if offset == dns_message.len() && opt_offset.is_some() == settings.is_some_and(|settings| settings.opt_len() != 0) {
+      result.cache_layout = Some(ResponseCacheLayout { opt_offset });
+   }
+   result
 }
